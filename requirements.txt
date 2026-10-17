@@ -1,0 +1,4 @@
+splusthon>=1.1.4,<1.2
+persiantools>=6.0,<7
+# Optional for local automated tests:
+pytest>=8.0
