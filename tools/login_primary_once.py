@@ -3,6 +3,12 @@
 
 Run only while the bot is stopped.  It makes exactly one connect/code/sign-in
 attempt and exits on any network failure.
+
+نشست جدید **فقط** داخل متغیر اختصاصی همین instance ذخیره می‌شود
+(``SOROUSH_SESSION_STRING_<INSTANCE>`` — برای Foxora یعنی
+``SOROUSH_SESSION_STRING_FOXORA``) و به متغیر عمومی
+``SOROUSH_SESSION_STRING`` — که ممکن است متعلق به ربات دیگری (B2) باشد —
+هیچ‌وقت دست نمی‌زند.
 """
 from __future__ import annotations
 import asyncio
@@ -15,6 +21,25 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
 
 
+def session_env_key() -> str:
+    """نام متغیر نشستِ اختصاصی همین instance.
+
+    منبع حقیقت: ``BOT_INSTANCE`` اگر ست شده باشد، در غیر این صورت فایل
+    نشانگر ``.bot_instance`` کنار ریشهٔ پروژه؛ در این مخزن هر دو «foxora»
+    هستند پس خروجی «SOROUSH_SESSION_STRING_FOXORA» است.  حتی در نبود هر دو،
+    متغیر عمومی هدف نمی‌شود.
+    """
+    instance = (os.environ.get("BOT_INSTANCE") or "").strip()
+    if not instance:
+        try:
+            instance = (ROOT / ".bot_instance").read_text(encoding="utf-8").strip()
+        except OSError:
+            instance = ""
+    if not instance:
+        instance = "foxora"  # هویت این مخزن؛ هرگز به متغیر عمومی برنمی‌گردد
+    return f"SOROUSH_SESSION_STRING_{instance.upper()}"
+
+
 def load_env():
     try: rows = ENV_FILE.read_text(encoding="utf-8").splitlines()
     except OSError: return
@@ -25,22 +50,34 @@ def load_env():
             os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
-def save_primary(value: str):
-    rows = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+def save_primary(value: str, *, key: str | None = None, env_file: Path | None = None):
+    """نشست را فقط در متغیر اختصاصی instance می‌نویسد.
+
+    خط ``SOROUSH_SESSION_STRING=`` (عمومی، احتمالاً متعلق به B2) و هر متغیر
+    اختصاصی دیگر دقیقاً همان‌طور که هست باقی می‌ماند.  تمام داده‌ها فقط در
+    ``.env`` همین مخزن (کنار ریشهٔ Foxora) نوشته می‌شود.
+    """
+    key = key or session_env_key()
+    target = env_file or ENV_FILE
+    prefix = key + "="
+    rows = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
     output, found = [], False
     for row in rows:
-        if row.startswith("SOROUSH_SESSION_STRING="):
-            output.append("SOROUSH_SESSION_STRING=" + value)
+        if row.startswith(prefix):
+            output.append(prefix + value)
             found = True
         else:
             output.append(row)
-    if not found: output.append("SOROUSH_SESSION_STRING=" + value)
-    fd, tmp = tempfile.mkstemp(prefix=".env.login.", dir=str(ROOT))
+    if not found:
+        if output and output[-1].strip():
+            output.append("")
+        output.append(prefix + value)
+    fd, tmp = tempfile.mkstemp(prefix=".env.login.", dir=str(target.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write("\n".join(output) + "\n")
-        os.replace(tmp, ENV_FILE)
-        try: ENV_FILE.chmod(0o600)
+        os.replace(tmp, target)
+        try: target.chmod(0o600)
         except OSError: pass
     except BaseException:
         try: os.unlink(tmp)
@@ -72,8 +109,10 @@ async def main():
             await asyncio.wait_for(client.sign_in(password=password), timeout=30)
         value = client.session.save()
         if not value: raise RuntimeError("session string خالی است")
-        save_primary(value)
-        print("✅ session اصلی جدید ذخیره شد.")
+        key = session_env_key()
+        save_primary(value, key=key)
+        print(f"✅ نشست جدید فقط در {key} داخل .env ذخیره شد.")
+        print("   به SOROUSH_SESSION_STRING عمومی و نشست ربات‌های دیگر دست زده نشد.")
     except Exception as error:
         print(f"❌ ورود انجام نشد: {error!r}")
         print("هیچ retry خودکاری انجام نشد؛ بعداً دوباره فقط همین ابزار را اجرا کنید.")

@@ -170,6 +170,70 @@ def _log_inactive_gate(bot, chat_id, text):
         pass
 
 
+# ============================================================
+# 🔑 مدیریت خرابی دائم نشست سروش (AuthKeyUnregisteredError)
+#
+# نشستِ منقضی/باطل‌شده یک خطای *دائم* است، نه شبکه‌ای: هیچ مقدار
+# reconnect/rebuild ای به کلید نامعتبر جان نمی‌دهد و فقط باعث طوفان
+# لاگ در ترمینال و restart-loop در watchdog می‌شود. این helpers خطاهای
+# دائم نشست را تشخیص می‌دهند تا ربات فقط یک بار — با راهنمای واضح — خارج
+# شود بدون حلقهٔ اتصال مجدد و بدون دست‌زدن به نشست ربات‌های دیگر.
+# ============================================================
+_PERMANENT_AUTH_NAMES = frozenset({
+    "AuthKeyUnregisteredError", "AuthKeyInvalidError",
+    "AuthKeyNotFound", "AuthKeyPermEmptyError",
+    "UserDeactivatedError", "UserDeactivatedBanError",
+    "SessionRevokedError", "UnauthorizedError",
+})
+_PERMANENT_AUTH_PATTERNS = (
+    "not registered in the system",
+    "auth_key_unregistered",
+    "authkeyunregistered",
+)
+
+
+class FatalAuthError(RuntimeError):
+    """نشست سروش دائماً نامعتبر است؛ توقف فوری، بدون retry."""
+
+
+def is_permanent_auth_error(error) -> bool:
+    """تشخیص دفاعی بدون وابستگی سخت به splusthon (اسم کلاس + متن خطا)."""
+    if error is None:
+        return False
+    try:
+        for cls in type(error).__mro__:
+            if cls.__name__ in _PERMANENT_AUTH_NAMES:
+                return True
+        text = str(error).lower()
+        return any(pattern in text for pattern in _PERMANENT_AUTH_PATTERNS)
+    except Exception:
+        return False
+
+
+def resolve_session_string(env_get=None, config_get=None, instance=None):
+    """سلسله‌مراتب قطعی نشست: اختصاصی instance → عمومی → config.
+
+    برای Foxora متغیر اختصاصی ``SOROUSH_SESSION_STRING_FOXORA`` حتماً در
+    اولویت اول است؛ نشست خرابِ generic/ربات دیگر فقط وقتی استفاده می‌شود
+    که هیچ نشست اختصاصی‌ای تعریف نشده باشد.
+    """
+    if env_get is None:
+        env_get = os.getenv
+    instance = (instance or os.getenv("BOT_INSTANCE", "main")).strip() or "main"
+    value = env_get(f"SOROUSH_SESSION_STRING_{instance.upper()}")
+    if value:
+        return value
+    value = env_get("SOROUSH_SESSION_STRING")
+    if value:
+        return value
+    if config_get is not None:
+        try:
+            return config_get("session_string", "") or ""
+        except Exception:
+            return ""
+    return ""
+
+
 class SoroushAntiSpamBot:
     def __init__(self, config_path="config/config.json"):
         print("🚀 در حال بارگذاری تنظیمات...")
@@ -592,16 +656,10 @@ class SoroushAntiSpamBot:
         تازه از همان session string می‌سازد تا sender/state/receive loop
         همگی از صفر باشند.
         """
-        # سشن هر instance مستقل است: اگر BOT_INSTANCE ست شده باشد، اول
-        # متغیر اختصاصی آن instance (SOROUSH_SESSION_STRING_<INSTANCE>) و
-        # بعد متغیر عمومی چک می‌شود. هیچ‌وقت سشن یک instance به دیگری
-        # منتقل یا overwrite نمی‌شود.
-        _instance_env = os.getenv("BOT_INSTANCE", "main").strip() or "main"
-        session_str = (
-            os.getenv(f"SOROUSH_SESSION_STRING_{_instance_env.upper()}")
-            or os.getenv("SOROUSH_SESSION_STRING")
-            or self.config_manager.get("session_string", "")
-        )
+        # سشن هر instance مستقل است: اول متغیر اختصاصی آن instance
+        # (SOROUSH_SESSION_STRING_<INSTANCE>) و بعد متغیر عمومی چک می‌شود.
+        # هیچ‌وقت سشن یک instance به دیگری منتقل یا overwrite نمی‌شود.
+        session_str = resolve_session_string(config_get=self.config_manager.get)
         api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
         api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
 
@@ -909,6 +967,12 @@ class SoroushAntiSpamBot:
         try:
             self.bot_account_id = getattr(await self.client.get_me(), "id", None)
         except Exception as error:
+            # نشست منقضی/نامعتبر (مثل AuthKeyUnregisteredError) خطای دائمی
+            # است: نه rebuild نه retry کمکی می‌کند. فوراً با راهنما خارج شو.
+            if is_permanent_auth_error(error):
+                raise FatalAuthError(
+                    f"نشست سروش نامعتبر/منقضی است ({error!r})"
+                ) from error
             self.bot_account_id = None
             self.logger.log_error(f"خطا در دریافت شناسه حساب ربات: {error}")
         if getattr(self, "admin_actions", None) is not None:
@@ -2591,6 +2655,12 @@ class SoroushAntiSpamBot:
         # را عوض می‌کند). این حلقه فقط روی self.clientِ فعلی منتظر قطع شدن
         # می‌ماند؛ بعد از بازسازی، self.client توسط supervisor عوض شده و
         # حلقه روی کلاینتِ جدید ادامه می‌یابد.
+        #
+        # جلوگیری از طوفان لاگ در Termux هنگام خطاهای تکراری اتصال:
+        # همان خطای یکسان بیش از دو بار پشتسر هم لاگ نمی‌شود (سپس هر
+        # ۱۰ تکرار یک بار) و حلقه برای تکرارهای همسان آرام‌سازی می‌شود.
+        _last_conn_error_sig = [None]
+        _conn_error_repeats = [0]
         while True:
             try:
                 # فقط وقتی «ربات فعال شد» نمایش داده می‌شود که اتصالِ فعلی
@@ -2606,10 +2676,30 @@ class SoroushAntiSpamBot:
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                self.logger.log_error(
-                    "SPLUS CONNECTION LOST "
-                    f"reason={error!r} waiting for supervisor rebuild"
-                )
+                # نشست نامعتبر/منقضی خطای دائمی است: rebuild/print
+                # تکراری فایده ندارد. یک بار و قطعی خارج شو.
+                if is_permanent_auth_error(error):
+                    raise FatalAuthError(
+                        f"نشست سروش در حلقهٔ اتصال از کار افتاد ({error!r})"
+                    ) from error
+                _sig = (type(error).__name__, str(error)[:120])
+                if _sig == _last_conn_error_sig[0]:
+                    _conn_error_repeats[0] += 1
+                else:
+                    _last_conn_error_sig[0] = _sig
+                    _conn_error_repeats[0] = 0
+                # تکرارهای بیش از ۲: فقط هر ۱۰ بار یک بار لاگ تا در
+                # Termux طوفان لاگ ایجاد نشود.
+                if _conn_error_repeats[0] < 2 or _conn_error_repeats[0] % 10 == 0:
+                    self.logger.log_error(
+                        "SPLUS CONNECTION LOST "
+                        f"reason={error!r} waiting for supervisor rebuild "
+                        f"repeats={_conn_error_repeats[0]}"
+                    )
+                # آرام‌سازیِ حلقه در برابر خطاهای همسانِ پیاپی (بدون
+                # تغییر رفتار reconnect؛ فقط فاصله‌گذاری بین تلاش‌ها).
+                if _conn_error_repeats[0]:
+                    await asyncio.sleep(min(2 ** min(_conn_error_repeats[0], 3), 10))
                 # درخواست‌های معلق را آزاد کن تا تسک‌های در انتظار، برای
                 # همیشه بلاک نمانند.
                 try:

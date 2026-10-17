@@ -52,10 +52,16 @@ if not os.environ.get("SOROUSH_BOT_DATA_DIR"):
 from modules.runtime_paths import PROJECT_ROOT, runtime_config_file, runtime_log_file
 from modules.time_utils import now_local
 from modules.watchdog_reporting import (
+    FATAL_AUTH_EXIT_CODE,
     deliver_with_fresh_client,
     pending_count,
     queue_incident,
 )
+
+
+def is_fatal_auth_exit(returncode: int) -> bool:
+    """خروج فرزند با «نشست دائماً نامعتبر» — restart نکن (طوفان لاگ نساز)."""
+    return returncode == FATAL_AUTH_EXIT_CODE
 
 
 LOG_FILE = runtime_log_file("watchdog.log")
@@ -1034,6 +1040,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "WATCHDOG OWNER REPORT QUEUED new=%s pending=%s",
                     queued, pending_count(),
                 )
+
+            if is_fatal_auth_exit(result.returncode):
+                # نشست سروش دائماً نامعتبر است (مثل AuthKeyUnregistered):
+                # restart-loop/fallback-loop فقط طوفان لاگ در Termux و
+                # تلاش‌های اتصال با نشست خراب تولید می‌کند. یک گزارش صف
+                # کردیم؛ یک بار تلاش تحویل می‌کنیم؛ سپس تمیز خارج می‌شویم.
+                logger.critical(
+                    "WATCHDOG FATAL AUTH SESSION exit_code=%s — NOT restarting; "
+                    "run tools/login_primary_once.py then ./foxora",
+                    result.returncode,
+                )
+                if not args.no_owner_report:
+                    _fallback_owner_delivery(logger)
+                return result.returncode
 
             if args.once:
                 if not args.no_owner_report:

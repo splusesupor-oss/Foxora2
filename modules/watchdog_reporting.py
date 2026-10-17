@@ -27,8 +27,17 @@ from modules.owner_private import (
     peer_user_id,
     resolve_private_owner_peer,
 )
-from modules.runtime_paths import PROJECT_ROOT, runtime_config_file
+from modules.runtime_paths import (
+    INSTANCE_NAME,
+    PROJECT_ROOT,
+    runtime_config_file,
+)
 
+
+# کد خروجی که ربات با آن می‌گوید «نشست سروش دائماً نامعتبر است»:
+# watchdog باید با دیدن این کد، پروسه را دوباره بالا نیاورد (در غیر این
+# صورت نشست خراب، حلقهٔ crash/restart و طوفان لاگ ایجاد می‌کند).
+FATAL_AUTH_EXIT_CODE = 43
 
 PENDING_FILE = runtime_config_file("watchdog_pending.json", migrate=False)
 _DEFAULT_MESSAGE_LIMIT = 3500
@@ -376,8 +385,12 @@ async def deliver_with_fresh_client(
 
     load_dotenv(PROJECT_ROOT / ".env")
     config = _deployment_config()
+    # نشست هر instance مستقل است: اول متغیر اختصاصی همین instance (برای
+    # Foxora: SOROUSH_SESSION_STRING_FOXORA) تا گزارش‌ها هرگز با نشست ربات
+    # دیگری (B2) ارسال نشوند.
     session_string = (
-        os.environ.get("SOROUSH_SESSION_STRING")
+        os.environ.get(f"SOROUSH_SESSION_STRING_{INSTANCE_NAME.upper()}")
+        or os.environ.get("SOROUSH_SESSION_STRING")
         or config.get("session_string")
         or ""
     )

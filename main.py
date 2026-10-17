@@ -29,8 +29,9 @@ os.environ.setdefault("BOT_INSTANCE", _default_instance())
 from dotenv import load_dotenv
 load_dotenv(override=False)
 
-from core.bot_working_split_ok import SoroushAntiSpamBot
+from core.bot_working_split_ok import FatalAuthError, SoroushAntiSpamBot
 from modules.time_utils import TEHRAN, now_local
+from modules.watchdog_reporting import FATAL_AUTH_EXIT_CODE
 import asyncio
 
 
@@ -111,7 +112,22 @@ async def main():
     print(f"[START] Tehran time: {_now.strftime('%Y-%m-%d %H:%M:%S')} "
           f"({TEHRAN})")
     bot = SoroushAntiSpamBot()
-    await bot.run()
+    try:
+        await bot.run()
+    except FatalAuthError as error:
+        # خروجِ قطعی، تمیز و فقط یک بار: نشست منقضی با reconnect درمان
+        # نمی‌شود؛ watchdog با همین کد خاص پروسه را دوباره بالا نمی‌آورد.
+        print("=" * 62)
+        print(" ⛔ نشست سروش Foxora نامعتبر/منقضی شده است:")
+        print(f"    {error}")
+        print()
+        print(" راه‌حل (فقط یک بار انجام می‌شود):")
+        print("    1) python3 tools/login_primary_once.py")
+        print("    2) ./foxora")
+        print(" نشست جدید فقط در SOROUSH_SESSION_STRING_FOXORA ذخیره می‌شود؛")
+        print(" نشست/دادهٔ ربات‌های دیگر (B2) تغییر نمی‌کند.")
+        print("=" * 62)
+        raise SystemExit(FATAL_AUTH_EXIT_CODE)
 
 if __name__ == "__main__":
     asyncio.run(main())
