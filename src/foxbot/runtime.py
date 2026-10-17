@@ -216,10 +216,13 @@ class RuntimeSettings:
         session_string = os.getenv("SOROUSH_SESSION_STRING") or None
         api_id_text = os.getenv("SOROUSH_API_ID", "").strip()
         api_hash = os.getenv("SOROUSH_API_HASH", "").strip() or None
-        if not api_id_text or not api_hash:
-            raise ValueError("Set both SOROUSH_API_ID and SOROUSH_API_HASH for SPlusthon")
-        api_id = int(api_id_text)
-        if api_id <= 0:
+        if bool(api_id_text) != bool(api_hash):
+            raise ValueError("Set both SOROUSH_API_ID and SOROUSH_API_HASH, or neither")
+        try:
+            api_id = int(api_id_text) if api_id_text else None
+        except ValueError as exc:
+            raise ValueError("SOROUSH_API_ID must be a positive integer") from exc
+        if api_id is not None and api_id <= 0:
             raise ValueError("SOROUSH_API_ID must be a positive integer")
         moderation_config = _load_safe_moderation_config()
         duration_text = os.getenv("FOX_MUTE_DURATION_SECONDS", "").strip()
@@ -399,8 +402,6 @@ class BotRuntime:
 
 def create_soroush_client(settings: RuntimeSettings) -> Any:
     """Build a SPlusthon client without starting/login prompts."""
-    if settings.api_id is None or settings.api_id <= 0 or not settings.api_hash:
-        raise ValueError("SPlusthon requires a positive API ID and a non-empty API hash")
     try:
         from splusthon import SoroushClient
         from splusthon.sessions import StringSession
@@ -413,6 +414,9 @@ def create_soroush_client(settings: RuntimeSettings) -> Any:
         if settings.session_string
         else str(settings.session_path)
     )
+    if settings.api_id is None and settings.api_hash is None:
+        # SPlusthon 1.1.x supplies its own library defaults; no invented credentials.
+        return SoroushClient(session)
     return SoroushClient(session, settings.api_id, settings.api_hash)
 
 

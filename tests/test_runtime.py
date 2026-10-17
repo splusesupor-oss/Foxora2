@@ -16,6 +16,7 @@ from foxbot.filters import (
     MAX_GLOBAL_WORD_FILE_BYTES,
     WordFilter,
 )
+from foxbot.login import initialize_session
 from foxbot.login import main as login_main
 from foxbot.rpc_queue import SerialRpcQueue
 from foxbot.runtime import (
@@ -43,7 +44,30 @@ def test_login_cli_help_exits_without_login(monkeypatch, capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         login_main()
     assert exc_info.value.code == 0
-    assert "interactive terminal" in capsys.readouterr().out
+    assert "ورود تعاملی" in capsys.readouterr().out
+
+
+def test_login_uses_interactive_prompts_and_disconnects(monkeypatch, tmp_path):
+    settings = make_settings(tmp_path)
+    prompts = iter(["+989121234567", "12345"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(prompts))
+    seen = {}
+
+    class LoginClient:
+        async def start(self, **kwargs):
+            seen.update(kwargs)
+
+        async def get_me(self):
+            return SimpleNamespace(id=42)
+
+        async def disconnect(self):
+            seen["disconnected"] = True
+
+    monkeypatch.setattr("foxbot.login.create_soroush_client", lambda _settings: LoginClient())
+    assert asyncio.run(initialize_session(settings)) == "42"
+    assert seen["phone"] == "+989121234567"
+    assert seen["code_callback"]() == "12345"
+    assert seen["disconnected"] is True
 
 
 class FakeClient:
@@ -186,8 +210,12 @@ def test_runtime_settings_parse_env_and_reject_invalid_mute_duration(monkeypatch
             RuntimeSettings.from_env()
     monkeypatch.setenv("FOX_OWNER_SILVER_GROUP_IDS", "12345,67890")
     monkeypatch.delenv("SOROUSH_API_HASH")
-    with pytest.raises(ValueError, match="API_ID and SOROUSH_API_HASH"):
+    with pytest.raises(ValueError, match="both SOROUSH_API_ID and SOROUSH_API_HASH"):
         RuntimeSettings.from_env()
+    monkeypatch.delenv("SOROUSH_API_ID")
+    settings = RuntimeSettings.from_env()
+    assert settings.api_id is None
+    assert settings.api_hash is None
 
 
 def test_runtime_rpc_queue_and_member_page_settings_are_bounded(
@@ -406,10 +434,15 @@ def test_runtime_scheduler_wires_the_approved_wordlist_reloader(tmp_path) -> Non
     asyncio.run(scenario())
 
 
-def test_create_client_rejects_missing_api_credentials_before_import_or_network(tmp_path) -> None:
+def test_create_client_uses_installed_library_defaults_without_api_overrides(tmp_path, monkeypatch) -> None:
+    import splusthon
+
+    observed = {}
+    monkeypatch.setattr(splusthon, "SoroushClient", lambda *args: observed.setdefault("args", args))
     settings = make_settings(tmp_path, api_id=None, api_hash=None)
-    with pytest.raises(ValueError, match="requires a positive API ID"):
-        create_soroush_client(settings)
+    result = create_soroush_client(settings)
+    assert result == (str(settings.session_path),)
+    assert observed["args"] == (str(settings.session_path),)
 
 
 def test_build_runtime_uses_local_components_without_network(tmp_path) -> None:
