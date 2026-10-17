@@ -27,7 +27,9 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
     is_filter_command = (
         text.startswith("/فیلتر ")
         or text.startswith("/رفع ")
-        or text == "/فیلترها"
+        or text in ("/فیلترها", "فیلترها", "!فیلترها")
+        or text.startswith("!فیلتر ")
+        or text.startswith("!رفع ")
     )
     if not _can_manage_group_words(bot, chat_id, user_id, username):
         if is_filter_command:
@@ -36,8 +38,9 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
         return False
 
 
-    if text.startswith("/فیلتر "):
-        word = text.replace("/فیلتر ", "", 1).strip()
+    if text.startswith("/فیلتر ") or text.startswith("!فیلتر "):
+        prefix = "/فیلتر " if text.startswith("/فیلتر ") else "!فیلتر "
+        word = text.replace(prefix, "", 1).strip()
 
         if word:
             if add_word(chat_id, word):
@@ -48,8 +51,9 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
             return True
 
 
-    if text.startswith("/رفع "):
-        word = text.replace("/رفع ", "", 1).strip()
+    if text.startswith("/رفع ") or text.startswith("!رفع "):
+        prefix = "/رفع " if text.startswith("/رفع ") else "!رفع "
+        word = text.replace(prefix, "", 1).strip()
 
         if word:
             if remove_word(chat_id, word):
@@ -60,15 +64,37 @@ async def handle_group_word_command(bot, event, text, chat_id, user_id, username
             return True
 
 
-    if text == "/فیلترها":
+    if text in ("/فیلترها", "فیلترها", "!فیلترها"):
 
         words = get_words(chat_id)
 
         if words:
-            await event.reply(
-                "📋 کلمات فیلتر شده:\n\n" +
-                "\n".join(words)
-            )
+            try:
+                from splusthon.tl.types import MessageEntitySpoiler, MessageEntityBold
+                has_entities = True
+            except ImportError:
+                has_entities = False
+
+            u16 = lambda s: len(s.encode("utf-16-le")) // 2
+            title = "📋 کلمات فیلتر شده:"
+            full_text = f"{title}\n\n"
+            entities = []
+            if has_entities:
+                entities.append(MessageEntityBold(offset=0, length=u16(title)))
+
+            for i, word in enumerate(words):
+                start = u16(full_text)
+                full_text += word
+                word_len = u16(word)
+                if has_entities:
+                    entities.append(MessageEntitySpoiler(offset=start, length=word_len))
+                if i < len(words) - 1:
+                    full_text += "\n"
+
+            if entities:
+                await event.reply(full_text, formatting_entities=entities)
+            else:
+                await event.reply(full_text)
         else:
             await event.reply("📋 هیچ کلمه‌ای فیلتر نشده")
 

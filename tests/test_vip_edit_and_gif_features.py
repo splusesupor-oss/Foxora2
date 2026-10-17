@@ -300,3 +300,83 @@ def test_gif_duplicate_mute_template_and_duration():
     assert entities[0].length == first_line_len
     assert entities[1].offset == 0
     assert entities[1].length == first_line_len
+
+
+@pytest.mark.anyio
+async def test_filter_list_spoiler_entities(tmp_path, monkeypatch):
+    """بررسی نمایش کلمات فیلتر شده به صورت اسپویلر در دستور /فیلترها."""
+    from modules.group_words_commands import handle_group_word_command
+    from modules import group_words_storage
+    from splusthon.tl.types import MessageEntitySpoiler, MessageEntityBold
+
+    monkeypatch.setattr(group_words_storage, "FILE", tmp_path / "group_words.json")
+    group_words_storage._cache = None
+    group_words_storage._cache_mtime = None
+
+    chat_id = -100555
+    group_words_storage.add_word(chat_id, "کلمه_اول")
+    group_words_storage.add_word(chat_id, "کلمه_دوم")
+
+    replies = []
+    class MockEvent:
+        async def reply(self, text, formatting_entities=None, *args, **kwargs):
+            replies.append({"text": text, "entities": formatting_entities})
+
+    # Bypass admin permission check
+    monkeypatch.setattr("modules.group_words_commands._can_manage_group_words", lambda *a: True)
+
+    ev = MockEvent()
+    handled = await handle_group_word_command(None, ev, "/فیلترها", chat_id, 1234, "admin")
+    assert handled
+    assert len(replies) == 1
+    reply = replies[0]
+    assert "📋 کلمات فیلتر شده:" in reply["text"]
+    assert "کلمه_اول" in reply["text"]
+    assert "کلمه_دوم" in reply["text"]
+
+    # Entities check
+    entities = reply["entities"]
+    assert entities is not None
+    spoilers = [e for e in entities if isinstance(e, MessageEntitySpoiler)]
+    assert len(spoilers) == 2
+    # Check bold title
+    bolds = [e for e in entities if isinstance(e, MessageEntityBold)]
+    assert len(bolds) == 1
+
+
+@pytest.mark.anyio
+async def test_strict_mode_enable_template(monkeypatch):
+    """بررسی قالب جدید پیام فعال‌سازی حالت سختگیرانه."""
+    from handlers.admin_handler import handle_admin_commands
+
+    monkeypatch.setattr("handlers.admin_handler._can_manage_commands", lambda *a, **k: asyncio.sleep(0, result=True))
+
+    responses = []
+    class MockEvent:
+        async def respond(self, text, *args, **kwargs):
+            responses.append(text)
+
+    class MockConfigManager:
+        banned_words = ["word1"] * 137
+
+    class MockBot:
+        config_manager = MockConfigManager()
+        logger = type("L", (), {"log_info": lambda *a: None, "log_error": lambda *a: None})()
+
+    chat_id = -100999
+    ev = MockEvent()
+    await handle_admin_commands(MockBot(), ev, "فعال کلمات ممنوعه", 111, chat_id)
+
+    assert len(responses) == 1
+    resp = responses[0]
+    assert "✅ حالت سختگیرانه\n (کلمات ممنوعه) برای این گروه فعال شد.\n۱۳۷ کلمه ممنوعه ...." in resp
+
+
+def test_ad_name_deletes_offending_message_in_source():
+    """بررسی اینکه پیام کاربر دارای نام تبلیغاتی حذف می‌شود و در گروه نمی‌ماند."""
+    src = inspect.getsource(handle_new_message)
+    # Check that ad_name branch deletes current_msg_id
+    assert "current_msg_id = getattr(event.message, \"id\", None)" in src
+    assert "ad_ids = message_tracker.spam_snapshot(chat_id, user_id, current_msg_id)" in src
+    assert "_queue_message_deletes(bot, chat_id, list(ad_ids))" in src
+

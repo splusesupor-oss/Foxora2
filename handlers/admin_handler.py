@@ -58,8 +58,12 @@ async def handle_admin_commands(bot, event, text: str, admin_id: int, chat_id: i
             )
         else:
             enable(chat_id)
+            count = len(getattr(getattr(bot, "config_manager", None), "banned_words", [])) or 137
+            count_fa = str(count).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
             await event.respond(
-                "✅ حالت سختگیرانه (کلمات ممنوعه) برای این گروه فعال شد."
+                "✅ حالت سختگیرانه\n"
+                " (کلمات ممنوعه) برای این گروه فعال شد.\n"
+                f"{count_fa} کلمه ممنوعه ...."
             )
         return
 

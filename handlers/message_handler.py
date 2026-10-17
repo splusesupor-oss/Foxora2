@@ -3521,6 +3521,21 @@ async def handle_new_message(bot, event):
                         )
                         return
                     bot.punished_users.add(punish_key)
+                    current_msg_id = getattr(event.message, "id", None)
+                    ad_ids = message_tracker.spam_snapshot(chat_id, user_id, current_msg_id)
+                    if not ad_ids and current_msg_id:
+                        ad_ids = [current_msg_id]
+                    if ad_ids:
+                        _queue_message_deletes(bot, chat_id, list(ad_ids))
+                    bot.logger.log_deleted_message(
+                        user_id=user_id,
+                        username=sender_username,
+                        group_id=chat_id,
+                        group_title=getattr(event_chat, "title", str(chat_id)),
+                        original_text=message_text,
+                        reason=f"نام تبلیغاتی: {ad_reason}",
+                        message_id=current_msg_id,
+                    )
                     shown_name = ad_name_detector.display_name(sender)
                     if punishment_mode.is_mute(chat_id):
                         ad_action_line = "به دلیل داشتن نام تبلیغاتی و لینک سکوت دائم شد."
@@ -3535,6 +3550,8 @@ async def handle_new_message(bot, event):
                     async def ad_name_ban_succeeded(_result):
                         # The announcement is deliberately after the real ban
                         # succeeds, and is owned by this one incident only.
+                        if ad_ids:
+                            _queue_message_deletes(bot, chat_id, list(ad_ids))
                         sender3 = getattr(bot, "outgoing_sender", None)
                         if sender3 is not None:
                             # Use outgoing queue so this notice does not block moderation worker
