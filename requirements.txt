@@ -1,4 +1,14 @@
-splusthon>=1.1.4,<1.2
-persiantools>=6.0,<7
-# Optional for local automated tests:
-pytest>=8.0
+# SPlusthon - کتابخانه اصلی برای یوزر-بات سروش پلاس (فورک Telethon)
+# نصب مستقیم از گیت‌هاب اگر نسخه pip قدیمی بود:
+# splusthon @ git+https://github.com/shayanheidari01/SPlusthon.git
+splusthon
+
+# برای مدیریت تنظیمات و env
+python-dotenv
+
+# برای حالت Bot API رسمی (اختیاری)
+requests
+sseclient-py
+
+# برای بهبود لاگ و پردازش
+colorama

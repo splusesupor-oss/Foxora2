@@ -1,5 +1,3 @@
-# Global banned terms supplied by the user; one entry per line.
-# Exact duplicate lines removed; spelling, spacing, and emoji variants otherwise preserved.
 خرید
 فروش
 تخفیف
@@ -107,33 +105,10 @@ vpn
 آبم
 با هزینه
 🌈
+♂️
+⚧️
 حال پی
 تمام سانسور
 حال میدم
 فیلم پی
 بایو
-ف ی ل م
-ثبادل
-طبادل
-ث بادل
-ت با دل
-شاه
-بی ناموس
-بیناموس
-کونی
-مدرسه ها شروع شد
-هوا سلده
-سک س
-بایو چک
-بیعو چ
-ک
-گروهم بیایین
-استورییمم
-استوری
-استوریمو
-استوریامو
-کوس
-خانم بیاد
-خانوم بیاد
-جاوید شاه
-عرزشی

@@ -1,0 +1,12 @@
+# Domains allowed for direct link inspection.
+google.com
+bing.com
+duckduckgo.com
+github.com
+wikipedia.org
+archive.org
+stackoverflow.com
+reddit.com
+youtube.com
+medium.com
+dev.to

@@ -1,67 +1,97 @@
-# Fox Soroush Bot
+# 🦊 Foxora
 
-A clean-room, Python 3.11+ moderation-bot core for Soroush Plus. The runtime adapter targets SPlusthon 1.1.x User-Bot/TL objects. This repository does not copy source from the previously inspected antispam repository; that repository had no declared license.
+ربات مدیریت و ضد-هرزنامهٔ **سروش پلاس** — نسخهٔ مستقل ساخته‌شده از روی کد
+واقعی و فعلی ربات **B2** (`splusesupor-oss/soroush-plus-antispam-bot-v2`)،
+همراه با قابلیت‌های حفظ‌شدهٔ لاگ/CPU/صفِ نسخهٔ قبلی Foxora.
 
-## Current behavior and safety model
+## ویژگی‌های کلیدی
 
-- Outbound calls made by the SPlusthon adapter go through `SerialRpcQueue`: one in-flight bot RPC per process, bounded total/per-group backlog (configured maxima: 4,096 total and 256 per group), round-robin scheduling and finite configurable pacing (0–60 seconds). Member-page requests are capped at 1,000 entries. The queue only controls calls routed through it; do not make direct concurrent calls on the same client or run multiple bot instances if you need one account-wide stream. SPlusthon's internal connection/update housekeeping is outside the adapter queue.
-- Bulk mute/kick and bulk unmute each use separate prepare/confirm operations. A complete scan is required; plans are scoped to the creating actor and group, expire after five minutes by default, and each target is revalidated immediately before action.
-- The global-owner broadcast aliases `اطلاع رسانی`, `اطلاعرسانی`, and `اعلان` use a separate guarded flow: only the global owner can start it; the bot fully scans the local active-group registry (up to 5,000 registry rows), previews the exact text/formatting, and sends nothing until an explicit confirmation. The registry must still match at confirmation, and every target is revalidated immediately before a separate, ordered group send through `SerialRpcQueue` (no retry); successes count only after a non-empty platform response. Incomplete scans and changed registries fail closed. An interrupted run is never auto-replayed; its state requires explicit clearing. Only aggregate completion counts are reported. No live Soroush broadcast has been run.
-- Unknown membership/admin/mute state, incomplete pagination, unavailable biographies and expired plans fail closed.
-- Mute state is written locally only after a successful verified platform response. Previous non-ban restrictions are saved for bot-applied mutes so a later unmute can restore them.
-- A kick is implemented as a temporary removal followed by restoration of the member's previous non-ban rights; success is reported only after membership is confirmed absent and the user is not left banned.
-- Kick history records successful bot kicks and observed platform kick events; voluntary departures are not counted. Unverified attempts remain available in the audit view.
-- Global banned words are loaded from `FOX_GLOBAL_WORDS_FILE`; exact duplicate lines are deduplicated in memory while distinct spellings remain, and the supplied file is not modified. Group lists are stored separately in SQLite; spelling variants are not synthesized or merged. Each group list is capped at 256 terms, 256 code points per term, and 64 KiB total; normalized match patterns are compiled once when a list changes; matching scans only the first 8,000 code points, and long list responses are sent in sequential pages. Existing stored lists over these limits fail closed at startup rather than being silently truncated. One- and two-letter alphabetic entries match whole tokens only, avoiding false positives from a single character such as `ک` inside ordinary words.
-- `FOX_CONFIG_FILE` (default `config/config.json`) may provide typed, allowlisted non-secret moderation settings; environment values take precedence. Credentials, warning text, banned-word data, and owner/admin/whitelist IDs in JSON are ignored. The optional global-owner virtual-silver group allowlist is supplied only by the operator through `FOX_OWNER_SILVER_GROUP_IDS`; it defaults empty and is not accepted from JSON. With `FOX_HOT_RELOAD_BANNED_WORDS=true`, only `FOX_GLOBAL_WORDS_FILE` is watched and atomically replaces the global matcher; the loader caps files at 256 KiB, 2,048 terms, and 512 code points per term, and a failed read retains the last working matcher. `FOX_WARNING_MESSAGE` is an optional environment-only template limited to `{username}`, `{reason}`, `{count}`, and `{threshold}`.
-- Global strict-word matching derives source-style Arabic/Persian lookalike, repeated-letter, and inter-letter separator matches from the exact configured terms; it does not add words or stored variants. The fuzzy scan is capped at 8,000 code points for CPU bounds.
-- New-message anti-spam uses a bounded clean-room detector keyed by group and user: commands and trusted owners/admins/VIPs do not seed it, native-admin checks use a short-lived cache and unknown status fails closed; similar promotional waves, three meaningful normalized repeats within 30 seconds, a separate four-copy/10-second flood fingerprint (which folds stretched runs but preserves word spacing), packed/decorative repeats, low-entropy bursts, and rapid floods trigger a verified ban; a long (>300-character), low-vocabulary payload paired with a word-filter hit is also a direct-ban signal. Promo similarity is CPU-bounded to 256-character comparison slices, so very long captions are not asserted to have exact source parity. At six consecutive GIFs (without a 2-minute cutoff), the first is retained and the next five are deleted; later GIFs are deleted while the one-hour flag is active. An unflagged GIF counter expires after an hour of inactivity. A one-hour mute is attempted once, and the success notice is sent only after platform verification; the GIF deletion flag remains active if mute verification fails. The third genuine forward in ten minutes triggers a 24-hour mute, with album siblings cleaned up; admin-priority management commands bypass forward cleanup, while public commands such as `راهنما` do not. Filtered-word, source username/ad-context, conservative phone-number, group-mention, source site-link, and source live-ad-emoji signals use the group's configured warning threshold/punishment mode. Separately, `FOX_CHECK_AD_NAMES` (default on) checks bounded first/last/username fields only against the approved global list and queues the configured group action after fresh role checks; source-only name terms/patterns are not copied and matched text is not echoed. Username rules cover multiple IDs, an ID paired with an ad-context token, or a short single ID (emails are excluded), while trusted/search domains and real SPlus meeting invitations are allowed. Unknown/blocked first links and a live phrase paired with a source-listed emoji create warnings. These domain lists and heuristics are separate from the user-approved banned-word list; structural-signal deletions are confirmed before their warnings are recorded. Delete retries use a bounded per-group worker; multi-step moderation workflows use a bounded per-group FIFO queue, and all platform RPCs remain one-at-a-time through the serial queue. Queue pressure fails closed and leaves detector state retryable; moderation is recorded only after platform verification. Ordinary photo/video attachments and a forward view count are not treated as spam. This remains a limited parity slice; see `docs/COMMAND_PARITY.md` for unported source heuristics and live-test requirements.
-- Clearing the bot's ban list archives/removes only local index rows; it never unbans anyone on Soroush Plus.
-- Native group-creator/admin reporting uses live SPlusthon 1.1.x TL calls: `messages.GetFullChatRequest` with `ChatParticipants` for basic chats, and paginated `channels.GetParticipantsRequest` with `ChannelParticipantsAdmins` for channels/megagroups. Creator/admin identities are taken from the service's participant constructors and matching `users` payloads, with numeric IDs; local group-owner registration and the global bot owner are not substituted. Activation and `لیست ادمین` perform fresh lookups (no role cache). `ChatParticipantsForbidden`, access-required/private-group RPC errors, invalid group IDs, network errors, and incomplete pages are reported distinctly; no roles are inferred from a partial response. Visibility depends on SoroushPlus's account membership/permissions. If the service does not expose `ChatParticipantCreator`/`ChannelParticipantCreator`, owner is reported as unavailable rather than guessed. These are verified against the installed SPlusthon types and fake RPC responses; live SoroushPlus access/permissions remain unverified.
-- The event bridge routes the active source admin aliases, group-scoped word-list commands, and many public/economy/game commands. The permissioned factual-search feature works only after group admins enable it and allow users; an allowed user replies to the bot's own message to request a source-linked public-web summary. This is retrieval, not generative AI, and live providers/platform delivery are unverified. The migration is still incomplete: do not assume every active source command or behavior is present. The explicit parity checklist is `docs/COMMAND_PARITY.md`.
-- Group expiry supports the exact global-owner commands `۵ روز`, `یک هفته`, `دو هفته`, and `یک ماه` (29 days). Expiry timestamps persist in SQLite as UTC; replies use Jalali dates and Tehran time. The scheduler normally checks every 15 seconds and shortens polling to 5 seconds while timed game deadlines are live; it closes expired groups locally and queues one bold expiry notice with capped exponential backoff on delivery failures. Messages from non-owners are gated immediately at the deadline, even before the scheduler runs; renewing an expired group reactivates it. This is unit-tested but has not been verified in a live Soroush group.
-- Optional source-admin migration reads `config/admins.json` by default; override with `FOX_LEGACY_ADMINS_FILE`. ID-based entries and old username-only entries are recognized read-only and lazily promoted to group-scoped SQLite records after a matching sender event. The file is never rewritten; new admin changes use the bot's local store. Missing or malformed files fail closed.
-- `دانلود عکس` uses an exact standalone trigger, a confirmation flow, bounded Openverse/Wikimedia/Wikipedia search, image-magic validation and separate sequential sends through the RPC queue. It charges 10 bronze per confirmed delivery (maximum two) only after the platform send succeeds. External search and live SPlusthon delivery have not been tested.
-- The local economy includes a bounded allowlist of JSON coin settings (`FOX_ECONOMY_SETTINGS_FILE`, 64 KiB file cap and finite numeric limits), atomic/idempotent SQLite spend, conversion, transfer, daily reward, and shop transactions, plus a persisted dynamic shop. A fixed-snapshot item-by-item comparison found zero mismatches in the 32-item catalog's keys, prices, coin types, labels, or effective aliases; a regression locks each item's price/coin assignment; transfer resolution is scoped to the current group and rejects numeric-ID and self targets. The special virtual-silver balance is available only when an operator supplies `FOX_OWNER_SILVER_GROUP_IDS` in the environment; no reference group IDs are bundled, and the JSON config cannot set this allowlist. Profile name/nickname validation uses only the approved global word filter; it does not merge group terms or unapproved source terms, and rejection messages do not expose the matched input. Game routes include a durable Minesweeper quota, a multiplayer Survival loop with 205 independent free-text questions across five levels (43/42/40/40/40), 415 accepted aliases, and ASCII, Persian, and Arabic-Indic digit variants for numeric answers; a six-question two-player Battle with 190 local questions; separate sentence-guess/build progress; and a 3-second countdown plus 60-second laugh round. A global-owner-only `وضعیت ربات` / `پینگ ربات` diagnostic reports local loop/RSS indicators and performs its platform probe through the serial queue. All audited local fun/game banks now meet or exceed fixed-snapshot record counts. A normalized answer-slot comparison also found and corrected earlier deficits in maemma, flags, and battle with independent digit/name alternatives; detailed source/local counts are in `docs/COMMAND_PARITY.md`. No source-bank text was copied. Exact prompts and some answer-validation, learning, timing, and delivery behavior still differ, so this is not a claim of full parity. See `docs/COMMAND_PARITY.md` for the inventory and open gaps.
+- ضد-اسپم لایه‌ای (لینک، شماره، یوزرنیم، کلمات ممنوعه، فوروارد، GIF و رسانه)
+- مدیریت کامل گروه: سکوت/بن/اخطار، قوانین، وایت‌لیست، انقضای گروه
+- اقتصاد داخلی (سکه، فروشگاه، رتبه‌بندی) و بانک سرگرمی/بازی‌ها
+- Watchdog با ری‌استارت خودکار و گزارش خصوصی به مالک
+- معماری صف کران‌دار و منصفانه برای درخواست‌ها + governor اتصال مشترک
+- لاگ غیرمسدودکننده با چرخش خودکار و سرکوب خطوط پرتکرار
 
-## Setup
+## مسیر اجرا و جدایی از B2
 
-1. Use Python 3.11 or newer and install the project:
+| مورد | Foxora | B2 (دست‌نخورده) |
+|---|---|---|
+| دایرکتوری پروژه | `~/Foxora` | مسیر clone خودش |
+| دادهٔ اجرایی (session/DB/config/log/backup) | `~/.foxora` | `~/.local/share/soroush-bot-bot2` |
+| فایل اجرای اصلی | `foxora.py` | `bot2.py` |
+| دستور اجرا | `./foxora` | `b2` |
+| نشانگر instance | `.bot_instance` = `foxora` | `bot2` |
+| متغیر session | `SOROUSH_SESSION_STRING_FOXORA` | `SOROUSH_SESSION_STRING_BOT2` |
 
-   ```sh
-   python -m venv .venv
-   .venv/bin/python -m pip install -e '.[test]'
-   ```
+Foxora هیچ فایل، session یا دیتابیسی از B2 را نمی‌خواند و نمی‌نویسد؛ قفل PID
+هر instance جداست و دو ربات می‌توانند هم‌زمان روی یک دستگاه کار کنند.
 
-2. Copy `.env.example` to `.env` if you want to customize settings (the program does not parse `.env` automatically). In SPlusthon 1.1.x, `SoroushClient` has library-provided API defaults, so `SOROUSH_API_ID` and `SOROUSH_API_HASH` are optional; if overriding, set both together. Do not invent values. The default local session path is `./data/soroush` (override with `SOROUSH_SESSION_PATH`); keep session files and credentials private and out of Git.
-3. From an interactive Termux terminal, install and initialize the session:
+## نصب (Termux)
 
-   ```sh
-   python -m pip install -e .
-   fox-soroush-login
-   ```
-
-   Enter your phone number in international format, then the received verification code; the library requests your 2FA password only if needed. The client saves its SQLite session at `./data/soroush`, so later bot runs reuse it. The login command prints no code, password, or session content. If a code expires/is incorrect or the network drops, rerun the command and authenticate again.
-4. Create the ignored local file `config/owner.json` from `config/owner.json.example` and set its `user_id` value to the canonical global owner's Soroush numeric ID (as a string, e.g. `{"user_id":"12345678"}`). Keep the real owner file out of Git; the tracked example intentionally contains `null`. Runtime authorization reads this canonical file directly, and missing/malformed configuration fails closed.
-5. Add only the exact owner-provided global word list to `config/banned_words.txt`. Group lists use the authorized `GroupWordService` methods and persist in SQLite.
-6. Wire the owner's existing mute duration through `FOX_MUTE_DURATION_SECONDS` (or an injected `DurationProvider`). There is deliberately no guessed default; bulk mute confirmation is disabled until a valid duration is configured.
-7. Run the event services with:
-
-   ```sh
-   .venv/bin/fox-soroush-bot
-   ```
-
-   Message filtering, legacy group-word commands, kick history, mute/search workflows, active admin aliases, group expiry, and many public/economy/game commands are routed. A broad static parity audit covers the routed commands, guards, timed-game behavior, and local bank counts. Full semantic equivalence and live SPlusthon/provider behavior are not claimed; documented constraints and remaining checks are listed in `docs/COMMAND_PARITY.md`.
-
-## Tests and checks
-
-```sh
-.venv/bin/ruff check src tests
-.venv/bin/python -m compileall -q src tests
-.venv/bin/pytest -q
+```bash
+git clone https://github.com/tbom8670-afk/Foxora.ai.git ~/Foxora
+cd ~/Foxora
+pip install -r requirements.txt
+cp .env.example .env   # سپس session را داخل .env پر کنید
 ```
 
-Latest local verification: Ruff passed, compileall passed, and **337 tests passed in 5.15s**. Coverage includes global-owner broadcast route/alias authorization, local bounded full scans, exact preview and confirmation, cancellation, registry-change aborts, per-target revalidation, sequential non-retrying RPC delivery and confirmation-only success counts; global-word obfuscation matching and bounded atomic hot reload; allowlisted moderation-config precedence; warning templates/delete-result wording; bounded/precompiled group-word filters; scan prefixes and streaming revision hashes; sequential paginated list replies; bounded RPC/member-page settings and warning-template outputs; bounded economy config with last-good retention; approved-list-only sender-name screening and role/command bypass; verified action notices and debounce; accurate nonstandard mute-duration wording; username/ad-context boundaries; site-policy domain classification and runtime toggle; live-ad emoji warnings; text-wave/repeat/flood boundaries; long repetitive filter-hit handling; GIF/forward/album routing (including prefixed admin exemptions); warning/action verification; role bypass; bounded fair queues; wallet aliases; current-group transfer resolution; fixed catalog item-level price/coin parity; environment-only owner-silver configuration; schema-v7/v8-to-v9 migrations and rank backfill; positive-only leaderboard filtering/tie order; all-zero daily ledger events; dynamic-shop rank updates; atomic economy flows; bounded sentence-build scrambling; best-answer repeated-token/tie scoring; 32-topic quiz metadata, a 415-prompt unique quiz/battle union, and 640 disjoint sentence-build/guess prompts; source-sized truth prompts; independent riddle/Maemma banks; and game-bank size/filter parity. Tests use fakes, installed SPlusthon TL/button constructors, statically verified event-builder structure and local SQLite only; they do not log in or contact Soroush Plus. Secret-role delivery is wired to the serial RPC queue and `InputPeerUser`; authenticated live DM delivery, event-sender metadata, and anti-spam behavior on a live group remain unverified.
+### اجرا
 
-## Third-party licensing
+```bash
+cd ~/Foxora
+./foxora           # اجرا با Watchdog (پیشنهادی؛ ری‌استارت خودکار)
+./foxora direct    # اجرای مستقیم بدون Watchdog
+./foxora status    # وضعیت
+./foxora stop      # توقف فقط Foxora
+```
 
-See [THIRD_PARTY.md](THIRD_PARTY.md). SPlusthon 1.1.4 is reported as GPL-3.0; review compatibility obligations before distributing the combined application. The bot's own license has not been selected.
+اولین اجرا برای ساخت session از شما ورود تعاملی می‌خواهد؛ session فقط در
+حافظه نگه داشته می‌شود (StringSession) و فایلی روی دیسک نوشته نمی‌شود.
+
+### مالک
+
+مالک در `config/owner.json` (canonical) تعریف می‌شود و در اولین اجرا به
+`~/.foxora/config/owner.json` هم‌گام می‌شود.
+
+## ساختار
+
+```
+foxora.py        لانچر instance (BOT_INSTANCE=foxora → ~/.foxora)
+foxora           اسکریپت فرمان run/direct/stop/status
+main.py          entrypoint اصلی (ارثی از B2)
+watchdog.py      ناظر دائمی crash/restart
+core/            مغز ربات (SoroushAntiSpamBot)
+handlers/        روترهای پیام/ادمین/پخش/اقتصاد/بازی/…
+modules/         ماژول‌ها: runtime_paths, rpc_governor, moderation_queue,
+                 outgoing_sender, logger_module, rpc_queue, fair_queue,
+                 fair_delete_queue (قابلیت‌های محفوظ Foxora) و…
+economy/         سکه/فروشگاه/رتبه‌بندی
+tests/           ~۱۱۰ تست B2 + تست‌های Foxora (مسیر/صف/لاگ/pacing)
+docs/FOXORA_PRESERVED_FEATURES.md   نگاشت دقیق قابلیت‌های حفظ‌شده
+```
+
+## قابلیت‌های حفظ‌شده از Foxora قبلی
+
+قبل از جایگزینی با کد B2، قابلیت‌های زیر شناسایی و **حفظ** شدند:
+
+1. **بهینه‌سازی لاگ و CPU** — لاگ غیرمسدود با صف کران‌دار و drop-on-saturation،
+   سرکوب لاگ‌های پرتکرار پیام‌محور (`BOT_VERBOSE_LOGS`)، چرخش خودکار
+   (`BOT_LOG_MAX_BYTES/BOT_LOG_BACKUPS`).
+2. **صف درخواست‌های گروه‌ها** — `SerialRpcQueue` (یک RPC در هر لحظه، fairness
+   بین گروه‌ها، bounded، dedupe فقط با کلید صریح)، `FairModerationQueue`،
+   `FairDeleteQueue` و knob pacing `RPC_MIN_INTERVAL_SECONDS` که روی مسیر
+   زندهٔ `RpcGovernor` هم اعمال می‌شود.
+
+نگاشت کامل: [`docs/FOXORA_PRESERVED_FEATURES.md`](docs/FOXORA_PRESERVED_FEATURES.md)
+
+## تست
+
+```bash
+python3 -m pytest tests/ -q
+```
+
+## مشارکت‌های شخص ثالث
+
+کد پایه از مخزن «soroush-plus-antispam-bot-v2» (ربات B2) منشعب شده است؛ به
+توسعه‌دهندگان آن اعتبار تعلق دارد.

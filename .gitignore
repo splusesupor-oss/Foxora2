@@ -1,36 +1,32 @@
-# Local credentials and account sessions
-.env*
-!.env.example
-config/owner.json
-*.session*
+# Python runtime artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*$py.class
+.pytest_cache/
+.mypy_cache/
 
-# Local runtime data
-*.db
-*.db-*
-*.sqlite
-*.sqlite-*
-*.sqlite3
-*.sqlite3-*
-/data/
-/logs/
+# Runtime logs and client sessions
+logs/
+*.session
+*.session-*
 *.log
 
-# Python/build/test artifacts
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.tox/
-.venv/
-.coverage
-
+# فایل env واقعی — هرگز commit نشود
 .env
-.venv/
-data/
-*.session
-*.sqlite3
-__pycache__/
+.env.*
+!.env.example
+
+# Runtime state — متعلق به ~/.foxora روی هر دستگاه است، نه مخزن.
+# deployment configها (config.json/owner.json/whitelist.txt/banned_words.txt)
+# عمداً در مخزن می‌مانند چون کد آن‌ها را از ریشهٔ پروژه می‌خواند.
+config/*.json
+!config/config.json
+!config/owner.json
+
+# runtime files
+backups/runtime/
+config/tmp*.tmp
+
+# .bot_instance برای Foxora عمداً commit می‌شود: identity همین مخزن است.
