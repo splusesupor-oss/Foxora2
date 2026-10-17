@@ -40,7 +40,7 @@ A clean-room, Python 3.11+ moderation-bot core for Soroush Plus. The runtime ada
    ```
 
    Enter your phone number in international format, then the received verification code; the library requests your 2FA password only if needed. The client saves its SQLite session at `./data/soroush`, so later bot runs reuse it. The login command prints no code, password, or session content. If a code expires/is incorrect or the network drops, rerun the command and authenticate again.
-4. Create `config/owner.json` from `config/owner.json.example` and set the canonical global owner ID. Missing/malformed owner configuration fails closed for management authorization.
+4. Create the ignored local file `config/owner.json` from `config/owner.json.example` and set its `user_id` value to the canonical global owner's Soroush numeric ID (as a string, e.g. `{"user_id":"12345678"}`). Keep the real owner file out of Git; the tracked example intentionally contains `null`. Runtime authorization reads this canonical file directly, and missing/malformed configuration fails closed.
 5. Add only the exact owner-provided global word list to `config/banned_words.txt`. Group lists use the authorized `GroupWordService` methods and persist in SQLite.
 6. Wire the owner's existing mute duration through `FOX_MUTE_DURATION_SECONDS` (or an injected `DurationProvider`). There is deliberately no guessed default; bulk mute confirmation is disabled until a valid duration is configured.
 7. Run the event services with:
