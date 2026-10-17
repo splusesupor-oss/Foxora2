@@ -20,6 +20,7 @@
 """
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,12 +38,33 @@ ONE_WEEK = "یک هفته"
 TWO_WEEKS = "دو هفته"
 ONE_MONTH = "یک ماه"
 
+_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+_ASCII_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+_WORD_DAYS = {
+    "یک": 1, "دو": 2, "سه": 3, "چهار": 4, "پنج": 5,
+    "شش": 6, "هفت": 7, "هشت": 8, "نه": 9, "ده": 10,
+    "یازده": 11, "دوازده": 12, "سیزده": 13, "چهارده": 14, "پانزده": 15,
+    "شانزده": 16, "هفده": 17, "هجده": 18, "نوزده": 19, "بیست": 20,
+    "بیست و یک": 21, "بیست و دو": 22, "بیست و سه": 23, "بیست و چهار": 24, "بیست و پنج": 25,
+    "بیست و شش": 26, "بیست و هفت": 27, "بیست و هشت": 28, "بیست و نه": 29, "سی": 30,
+    "سی و یک": 31, "سی و دو": 32, "سی و سه": 33, "سی و چهار": 34, "سی و پنج": 35,
+    "سی و شش": 36, "سی و هفت": 37, "سی و هشت": 38, "سی و نه": 39, "چهل": 40,
+}
+
 DURATIONS = {
     FIVE_DAYS: 5,
     ONE_WEEK: 7,
     TWO_WEEKS: 14,
     ONE_MONTH: 29,
 }
+for _d in range(1, 41):
+    DURATIONS[f"{_d} روز"] = _d
+    DURATIONS[f"{str(_d).translate(_PERSIAN_DIGITS)} روز"] = _d
+
+for _w, _d in _WORD_DAYS.items():
+    DURATIONS[f"{_w} روز"] = _d
+
 COMMANDS = frozenset(DURATIONS)
 
 # --- پیام‌ها ------------------------------------------------------------
@@ -78,18 +100,38 @@ def normalize_command(text):
     return " ".join(value.split())
 
 
-def match_command(text):
-    """اگر متن *دقیقاً* یکی از سه دستور باشد همان را برمی‌گرداند، وگرنه None.
+_DAYS_REGEX = re.compile(r"^(\d+|[۰-۹]+|[٠-٩]+)\s*روز$")
 
-    تطبیق کامل است: «یک هفته دیگر» یا «ثبت یک ماه» تطبیق نمی‌کنند، پس این
-    مسیر هرگز با دستورهای دیگر تداخل نمی‌کند.
-    """
+
+def match_command(text):
+    """اگر متن یکی از دستورهای انقضا (از ۱ روز تا ۴۰ روز، یک هفته، دو هفته، یک ماه) باشد همان را برمی‌گرداند، وگرنه None."""
     normalized = normalize_command(text)
-    return normalized if normalized in DURATIONS else None
+    if normalized in DURATIONS:
+        return normalized
+    m = _DAYS_REGEX.match(normalized)
+    if m:
+        try:
+            val = int(m.group(1).translate(_ASCII_DIGITS))
+            if 1 <= val <= 40:
+                return f"{str(val).translate(_PERSIAN_DIGITS)} روز"
+        except ValueError:
+            pass
+    return None
 
 
 def duration_days(command):
-    return DURATIONS.get(normalize_command(command))
+    normalized = normalize_command(command)
+    if normalized in DURATIONS:
+        return DURATIONS[normalized]
+    m = _DAYS_REGEX.match(normalized)
+    if m:
+        try:
+            val = int(m.group(1).translate(_ASCII_DIGITS))
+            if 1 <= val <= 40:
+                return val
+        except ValueError:
+            pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +252,7 @@ def format_datetime(moment):
         f"({jd} {_JALALI_MONTHS[jm - 1]} {jy}) "
         f"- ساعت {local.hour:02d}:{local.minute:02d}"
     )
-    return text.translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
+    return text.translate(_PERSIAN_DIGITS)
 
 
 # ---------------------------------------------------------------------------

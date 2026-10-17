@@ -2399,8 +2399,14 @@ async def handle_fast_moderation_command(
         # با «رفع سکوت» است.
         try:
             from modules import manual_mute_storage
+            _t_uname = getattr(target_user, "username", None)
+            _t_dname = " ".join(
+                p for p in (getattr(target_user, "first_name", None),
+                            getattr(target_user, "last_name", None)) if p
+            ).strip()
             manual_mute_storage.add_manual_mute(
-                chat_id, target_user.id)
+                chat_id, target_user.id, username=_t_uname, display_name=_t_dname
+            )
         except Exception as mm_error:
             bot.logger.log_error(
                 f"MANUAL MUTE MARK FAILED: {mm_error}")
@@ -3796,8 +3802,21 @@ async def handle_new_message(bot, event):
             ):
                 return
             # گروه منقضی: همهٔ قابلیت‌ها متوقف می‌شوند تا مالک اصلی دوباره
-            # یکی از سه دستور را بفرستد.
+            # یکی از دستورها را بفرستد.
             if group_expiry_blocks(chat_id, sender):
+                if not group_expiry.was_notified(chat_id):
+                    try:
+                        deactivate_group(chat_id)
+                    except Exception:
+                        pass
+                    group_expiry.mark_notified(chat_id)
+                    exp_msg, exp_spans = group_expiry.build_expired_message()
+                    try:
+                        await event.reply(
+                            exp_msg, formatting_entities=_entities(exp_spans)
+                        )
+                    except Exception:
+                        pass
                 return
 
         # ------------------------------------------------------------------
@@ -3966,7 +3985,8 @@ async def handle_new_message(bot, event):
         fast_command = (
             clean_text in SIMPLE_REPLIES
             or clean_text in INSULTS
-            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "تغییر مجازات", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه", "vip", "لغو vip", "لیست vip"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text in {"راهنما", "/help", "!help", "help", "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "راهنمای امتیاز", "امتیاز من", "رتبه ها", "بیوگرافی", "یاد آوری", "ترجمه", "قفل", "باز", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "جک", "تصحیح کلمات", "اسم فامیل", "حدس ایموجی", "حدس پرچم", "دانستنی", "حافظه من", "حذف اسم", "قوانین", "ثبت قوانین", "حذف قوانین", "حذف حافظه", "موجودی", "فروشگاه", "سکوت", "رفع سکوت", "آزاد", "اخطار", "اخراج", "بن", "ثبت ادمین", "برکناری ادمین", "لغو ادمین", "تغییر اخطار", "تغییر مجازات", "سنجاق", "قفل", "باز", "سابقه ها", "سابقه‌ها", "سطح گروه", "vip", "لغو vip", "لیست vip", "لیست سکوت", "پاک لیست سکوت", "لیست اخراج", "پاک لیست اخراج"} | EMOJI_RESET_COMMANDS | FOX_GAME_COMMANDS
+            or clean_text.startswith(("سکوت نام", "اخراج نام"))
             or (
                 clean_text.startswith(("!", "/", "."))
                 and not clean_text.startswith(("/فیلتر ", "/رفع "))
@@ -6696,7 +6716,7 @@ async def handle_new_message(bot, event):
 
 
         # حذف چند پیام آخر با پاک عدد
-        if clean_text.startswith("پاک "):
+        if clean_text.startswith("پاک ") and not clean_text.startswith(("پاک لیست سکوت", "پاک لیست اخراج")):
             try:
                 sender_username = getattr(sender, "username", None)
                 if not _can_delete_messages(
@@ -7520,8 +7540,14 @@ async def handle_new_message(bot, event):
                     # رفعش فقط با «رفع سکوت» است.
                     try:
                         from modules import manual_mute_storage
+                        _t_uname = getattr(target_user, "username", None)
+                        _t_dname = " ".join(
+                            p for p in (getattr(target_user, "first_name", None),
+                                        getattr(target_user, "last_name", None)) if p
+                        ).strip()
                         manual_mute_storage.add_manual_mute(
-                            chat_id, target_user.id)
+                            chat_id, target_user.id, username=_t_uname, display_name=_t_dname
+                        )
                     except Exception as mm_error:
                         bot.logger.log_error(
                             f"MANUAL MUTE MARK FAILED: {mm_error}")
@@ -7646,6 +7672,338 @@ async def handle_new_message(bot, event):
                 bot.logger.log_error(f"خطای رفع سکوت: {e}")
                 await event.reply(f"❌ خطا در رفع سکوت:\n{e}")
 
+            return
+
+        # ===== لیست سکوت =====
+        if clean_text in ("لیست سکوت", "!لیست سکوت", "/لیست سکوت"):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            try:
+                from modules import manual_mute_storage
+                muted_list = manual_mute_storage.get_muted_users(chat_id)
+                if not muted_list:
+                    await event.reply("لیست سکوت خالی است.")
+                    return
+                lines = ["لیست افراد در سکوت:"]
+                for idx, item in enumerate(muted_list, 1):
+                    dname = item.get("display_name") or "بدون نام"
+                    uname = f" (@{item['username']})" if item.get("username") else ""
+                    uid = item.get("user_id") or "نامشخص"
+                    lines.append(f"{idx}. {dname}{uname} - شناسه: {uid}")
+                await event.reply("\n".join(lines))
+            except Exception as e:
+                bot.logger.log_error(f"ERROR LIST MUTE: {e}")
+                await event.reply(f"❌ خطا در دریافت لیست سکوت:\n{e}")
+            return
+
+        # ===== پاک لیست سکوت =====
+        if clean_text in ("پاک لیست سکوت", "!پاک لیست سکوت", "/پاک لیست سکوت"):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            try:
+                from modules import manual_mute_storage
+                muted_list = manual_mute_storage.get_muted_users(chat_id)
+                if not muted_list:
+                    await event.reply("هیچ کاربری در لیست سکوت نیست.")
+                    return
+                unmuted_count = 0
+                for item in muted_list:
+                    uid = item.get("user_id")
+                    if not uid:
+                        continue
+                    try:
+                        target_id = int(uid)
+                    except (TypeError, ValueError):
+                        continue
+                    try:
+                        await bot.admin_actions.unmute_user(
+                            chat_id, target_id, chat=resolved_permission_chat
+                        )
+                        unmuted_count += 1
+                        if hasattr(bot, "clear_released_user_state"):
+                            bot.clear_released_user_state(chat_id, target_id)
+                        bot.clear_spam_lock((chat_id, target_id))
+                        target_key = f"{chat_id}:{target_id}"
+                        bot.punished_users.discard(target_key)
+                        bot.tracker.muted_users.pop(target_key, None)
+                        bot.tracker.reset_count(chat_id, target_id)
+                    except Exception as err:
+                        bot.logger.log_error(f"UNMUTE ERROR IN CLEAR LIST {uid}: {err}")
+                manual_mute_storage.clear_manual_mutes(chat_id)
+                admin_tools.log_action(chat_id, sender, "پاک لیست سکوت")
+                await event.reply(f"سکوت تمام افراد گروه برداشته شد. (تعداد: {unmuted_count})")
+            except Exception as e:
+                bot.logger.log_error(f"ERROR CLEAR MUTE LIST: {e}")
+                await event.reply(f"❌ خطا در پاک کردن لیست سکوت:\n{e}")
+            return
+
+        # ===== لیست اخراج =====
+        if clean_text in ("لیست اخراج", "!لیست اخراج", "/لیست اخراج"):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            try:
+                from modules import banned_storage
+                banned_list = banned_storage.get_banned_list(chat_id)
+                if not banned_list:
+                    await event.reply("لیست اخراج خالی است.")
+                    return
+                lines = ["لیست افراد اخراج شده:"]
+                for idx, item in enumerate(banned_list, 1):
+                    dname = item.get("display_name") or "بدون نام"
+                    uname = f" (@{item['username']})" if item.get("username") else ""
+                    uid = item.get("user_id") or "نامشخص"
+                    reason = f" (دلیل: {item['reason']})" if item.get("reason") else ""
+                    lines.append(f"{idx}. {dname}{uname} - شناسه: {uid}{reason}")
+                await event.reply("\n".join(lines))
+            except Exception as e:
+                bot.logger.log_error(f"ERROR LIST KICK: {e}")
+                await event.reply(f"❌ خطا در دریافت لیست اخراج:\n{e}")
+            return
+
+        # ===== پاک لیست اخراج =====
+        if clean_text in ("پاک لیست اخراج", "!پاک لیست اخراج", "/پاک لیست اخراج"):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            try:
+                from modules import banned_storage
+                banned_list = banned_storage.get_banned_list(chat_id)
+                if not banned_list:
+                    await event.reply("هیچ کاربری در لیست اخراج نیست.")
+                    return
+                unbanned_count = 0
+                for item in banned_list:
+                    uid = item.get("user_id")
+                    uname = item.get("username")
+                    if not uid:
+                        continue
+                    try:
+                        target_id = int(uid)
+                    except (TypeError, ValueError):
+                        target_id = uid
+                    try:
+                        await bot.admin_actions.unban_user(
+                            chat_id, target_id, username=uname
+                        )
+                        unbanned_count += 1
+                        if hasattr(bot, "clear_released_user_state"):
+                            bot.clear_released_user_state(chat_id, target_id)
+                        bot.clear_spam_lock((chat_id, target_id))
+                        target_key = f"{chat_id}:{target_id}"
+                        bot.punished_users.discard(target_key)
+                        bot.tracker.banned_users.pop(target_key, None)
+                        bot.tracker.reset_count(chat_id, target_id)
+                    except Exception as err:
+                        bot.logger.log_error(f"UNBAN ERROR IN CLEAR LIST {uid}: {err}")
+                banned_storage.clear_group_banned(chat_id)
+                admin_tools.log_action(chat_id, sender, "پاک لیست اخراج")
+                await event.reply(f"تمام افراد از لیست بن حذف و رفع مسدودیت شدند. (تعداد: {unbanned_count})")
+            except Exception as e:
+                bot.logger.log_error(f"ERROR CLEAR KICK LIST: {e}")
+                await event.reply(f"❌ خطا در پاک کردن لیست اخراج:\n{e}")
+            return
+
+        # ===== سکوت نام [عبارت] =====
+        if clean_text in ("سکوت نام", "!سکوت نام", "/سکوت نام") or clean_text.startswith((
+            "سکوت نام ", "!سکوت نام ", "/سکوت نام ", "سکوت نام:", "!سکوت نام:", "/سکوت نام:"
+        )):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            raw_phrase = clean_text
+            for prefix in ("!سکوت نام:", "/سکوت نام:", "!سکوت نام ", "/سکوت نام ", "سکوت نام:", "سکوت نام ", "!سکوت نام", "/سکوت نام", "سکوت نام"):
+                if raw_phrase.startswith(prefix):
+                    raw_phrase = raw_phrase[len(prefix):]
+                    break
+            phrase = raw_phrase.strip()
+            if not phrase:
+                await event.reply("لطفاً نام مورد نظر را وارد کنید. مثال: سکوت نام علی")
+                return
+
+            try:
+                from modules.persian_names import match_persian_name
+                from modules import manual_mute_storage
+
+                chat_target = resolved_permission_chat or event_chat or chat_id
+                try:
+                    participants = await bot.client.get_participants(chat_target)
+                except Exception as part_err:
+                    bot.logger.log_error(f"FAILED TO GET PARTICIPANTS chat_id={chat_id}: {part_err}")
+                    await event.reply(f"❌ خطا در دریافت لیست اعضای گروه:\n{part_err}")
+                    return
+
+                if not participants:
+                    await event.reply("❌ دریافت لیست اعضای گروه با خطا مواجه شد یا گروه خالی است.")
+                    return
+
+                me_id = getattr(bot, "account_id", None) or getattr(bot.admin_actions, "bot_account_id", None)
+                if me_id is None:
+                    try:
+                        me = await bot.client.get_me()
+                        if me:
+                            me_id = me.id
+                    except Exception:
+                        pass
+                group_owner_id = get_group_owner(chat_id)
+
+                muted_count = 0
+                for member in participants:
+                    m_id = getattr(member, "id", None)
+                    if not m_id:
+                        continue
+                    if m_id == me_id or m_id == user_id:
+                        continue
+                    if is_global_owner(m_id):
+                        continue
+                    if group_owner_id is not None and str(m_id) == str(group_owner_id):
+                        continue
+                    m_user = getattr(member, "username", None)
+                    if is_admin(chat_id, m_id, m_user):
+                        continue
+                    if await _is_native_group_admin(bot, chat_id, m_id, member, resolved_permission_chat):
+                        continue
+
+                    fn = getattr(member, "first_name", "") or ""
+                    ln = getattr(member, "last_name", "") or ""
+                    if match_persian_name(phrase, fn, ln):
+                        try:
+                            ok = await bot.admin_actions.mute_user(
+                                chat_id, m_id, user=member, chat=resolved_permission_chat
+                            )
+                            if ok:
+                                muted_count += 1
+                                add_mute(chat_id)
+                                dname = " ".join(p for p in (fn, ln) if p).strip()
+                                manual_mute_storage.add_manual_mute(
+                                    chat_id, m_id, username=m_user, display_name=dname
+                                )
+                                try:
+                                    user_history.add_mute(chat_id, member, f"سکوت نام {phrase}")
+                                except Exception:
+                                    pass
+                        except Exception as err:
+                            bot.logger.log_error(f"ERROR MUTING BY NAME {m_id}: {err}")
+
+                admin_tools.log_action(chat_id, sender, f"سکوت نام {phrase}")
+                if muted_count > 0:
+                    await event.reply(f"تعداد {muted_count} کاربر با نام «{phrase}» سکوت شدند.")
+                else:
+                    await event.reply(f"کاربری با نام مطابق «{phrase}» یافت نشد.")
+            except Exception as e:
+                bot.logger.log_error(f"ERROR IN MUTE BY NAME: {e}")
+                await event.reply(f"❌ خطا در اجرای سکوت نام:\n{e}")
+            return
+
+        # ===== اخراج نام [عبارت] =====
+        if clean_text in ("اخراج نام", "!اخراج نام", "/اخراج نام") or clean_text.startswith((
+            "اخراج نام ", "!اخراج نام ", "/اخراج نام ", "اخراج نام:", "!اخراج نام:", "/اخراج نام:"
+        )):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            raw_phrase = clean_text
+            for prefix in ("!اخراج نام:", "/اخراج نام:", "!اخراج نام ", "/اخراج نام ", "اخراج نام:", "اخراج نام ", "!اخراج نام", "/اخراج نام", "اخراج نام"):
+                if raw_phrase.startswith(prefix):
+                    raw_phrase = raw_phrase[len(prefix):]
+                    break
+            phrase = raw_phrase.strip()
+            if not phrase:
+                await event.reply("لطفاً نام مورد نظر را وارد کنید. مثال: اخراج نام علی")
+                return
+
+            try:
+                from modules.persian_names import match_persian_name
+                from modules import banned_storage
+
+                chat_target = resolved_permission_chat or event_chat or chat_id
+                try:
+                    participants = await bot.client.get_participants(chat_target)
+                except Exception as part_err:
+                    bot.logger.log_error(f"FAILED TO GET PARTICIPANTS chat_id={chat_id}: {part_err}")
+                    await event.reply(f"❌ خطا در دریافت لیست اعضای گروه:\n{part_err}")
+                    return
+
+                if not participants:
+                    await event.reply("❌ دریافت لیست اعضای گروه با خطا مواجه شد یا گروه خالی است.")
+                    return
+
+                me_id = getattr(bot, "account_id", None) or getattr(bot.admin_actions, "bot_account_id", None)
+                if me_id is None:
+                    try:
+                        me = await bot.client.get_me()
+                        if me:
+                            me_id = me.id
+                    except Exception:
+                        pass
+                group_owner_id = get_group_owner(chat_id)
+
+                kicked_count = 0
+                for member in participants:
+                    m_id = getattr(member, "id", None)
+                    if not m_id:
+                        continue
+                    if m_id == me_id or m_id == user_id:
+                        continue
+                    if is_global_owner(m_id):
+                        continue
+                    if group_owner_id is not None and str(m_id) == str(group_owner_id):
+                        continue
+                    m_user = getattr(member, "username", None)
+                    if is_admin(chat_id, m_id, m_user):
+                        continue
+                    if await _is_native_group_admin(bot, chat_id, m_id, member, resolved_permission_chat):
+                        continue
+
+                    fn = getattr(member, "first_name", "") or ""
+                    ln = getattr(member, "last_name", "") or ""
+                    if match_persian_name(phrase, fn, ln):
+                        kicked = False
+                        try:
+                            await bot.client.edit_permissions(
+                                chat_id, member, until_date=None, view_messages=False
+                            )
+                            kicked = True
+                        except Exception:
+                            try:
+                                kicked = await bot.admin_actions.ban_user(
+                                    chat_id, m_id, user=member, chat=resolved_permission_chat
+                                )
+                            except Exception:
+                                kicked = False
+
+                        if kicked:
+                            kicked_count += 1
+                            add_kick(chat_id)
+                            dname = " ".join(p for p in (fn, ln) if p).strip()
+                            banned_storage.add_banned(
+                                chat_id, m_id,
+                                username=m_user,
+                                display_name=dname,
+                                reason=f"اخراج نام {phrase}",
+                                source="manual",
+                            )
+                            try:
+                                user_history.add_kick(chat_id, member, f"اخراج نام {phrase}")
+                            except Exception:
+                                pass
+
+                admin_tools.log_action(chat_id, sender, f"اخراج نام {phrase}")
+                if kicked_count > 0:
+                    await event.reply(f"تعداد {kicked_count} کاربر با نام «{phrase}» اخراج شدند.")
+                else:
+                    await event.reply(f"کاربری با نام مطابق «{phrase}» یافت نشد.")
+            except Exception as e:
+                bot.logger.log_error(f"ERROR IN KICK BY NAME: {e}")
+                await event.reply(f"❌ خطا در اجرای اخراج نام:\n{e}")
             return
 
         # حذف دستی پیام با ریپلای و کلمه پاک

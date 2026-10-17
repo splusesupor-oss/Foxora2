@@ -1706,7 +1706,8 @@ class SoroushAntiSpamBot:
                     "ثبت گروه", "حذف گروه",
                     "۵ روز", "یک هفته", "دو هفته", "یک ماه",
                     "مهلت گروه", "لیست انقضا",
-                }
+                    "لیست سکوت", "پاک لیست سکوت", "لیست اخراج", "پاک لیست اخراج",
+                } or command_priority_text.startswith(("سکوت نام", "اخراج نام")) or (expiry_command and expiry_command(command_priority_text) is not None)
                 self.debug_message_log(
                     "COMMAND PRIORITY CHECK "
                     f"text={raw_text!r} normalized={command_priority_text!r} "

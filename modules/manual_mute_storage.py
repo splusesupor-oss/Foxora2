@@ -43,18 +43,34 @@ def _save(data):
     _cache_mtime = FILE.stat().st_mtime_ns
 
 
-def add_manual_mute(group_id, user_id):
+def add_manual_mute(group_id, user_id, username=None, display_name=None):
     """ثبت سکوت دستی (بدون حذف بقیه)."""
     g = str(normalize_group_id(group_id))
     data = _load()
-    ids = data.get(g)
-    if not isinstance(ids, list):
-        ids = []
+    items = data.get(g)
+    if not isinstance(items, list):
+        items = []
     uid = str(user_id)
-    if uid in ids:
-        return
-    ids.append(uid)
-    data[g] = ids
+    # بررسی اینکه قبلاً ثبت شده یا خیر
+    for idx, item in enumerate(items):
+        item_uid = item.get("user_id") if isinstance(item, dict) else str(item)
+        if str(item_uid) == uid:
+            if isinstance(item, dict):
+                if username:
+                    item["username"] = username
+                if display_name:
+                    item["display_name"] = display_name
+                items[idx] = item
+                data[g] = items
+                _save(data)
+            return
+    record = {
+        "user_id": uid,
+        "username": username or None,
+        "display_name": display_name or None,
+    }
+    items.append(record)
+    data[g] = items
     _save(data)
 
 
@@ -62,14 +78,20 @@ def remove_manual_mute(group_id, user_id):
     """حذف سکوت دستی؛ False اگر ثبت نشده باشد."""
     g = str(normalize_group_id(group_id))
     data = _load()
-    ids = data.get(g)
-    if not isinstance(ids, list):
+    items = data.get(g)
+    if not isinstance(items, list):
         return False
     uid = str(user_id)
-    if uid not in ids:
+    found = None
+    for item in items:
+        item_uid = item.get("user_id") if isinstance(item, dict) else str(item)
+        if str(item_uid) == uid:
+            found = item
+            break
+    if found is None:
         return False
-    ids.remove(uid)
-    data[g] = ids
+    items.remove(found)
+    data[g] = items
     _save(data)
     return True
 
@@ -77,7 +99,48 @@ def remove_manual_mute(group_id, user_id):
 def is_manual_muted(group_id, user_id):
     try:
         data = _load()
-        ids = data.get(str(normalize_group_id(group_id)))
-        return isinstance(ids, list) and str(user_id) in ids
+        items = data.get(str(normalize_group_id(group_id)))
+        if not isinstance(items, list):
+            return False
+        uid = str(user_id)
+        for item in items:
+            item_uid = item.get("user_id") if isinstance(item, dict) else str(item)
+            if str(item_uid) == uid:
+                return True
+        return False
     except Exception:
         return False
+
+
+def get_muted_users(group_id):
+    """لیست افراد در حال حاضر در سکوت برای این گروه."""
+    try:
+        data = _load()
+        items = data.get(str(normalize_group_id(group_id)))
+        if not isinstance(items, list):
+            return []
+        result = []
+        for item in items:
+            if isinstance(item, dict):
+                result.append(dict(item))
+            else:
+                result.append({
+                    "user_id": str(item),
+                    "username": None,
+                    "display_name": None,
+                })
+        return result
+    except Exception:
+        return []
+
+
+def clear_manual_mutes(group_id):
+    """پاک کردن تمام افراد از لیست سکوت این گروه."""
+    g = str(normalize_group_id(group_id))
+    data = _load()
+    if g not in data:
+        return 0
+    count = len(data[g]) if isinstance(data[g], list) else 0
+    data.pop(g, None)
+    _save(data)
+    return count

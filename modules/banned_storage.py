@@ -359,6 +359,37 @@ def is_banned(group_id, user_id, username=None, data=None):
     return banned
 
 
+def get_banned_list(group_id):
+    """لیست تمام رکوردهای اخراج/بن برای این گروه."""
+    gid = normalize_group_id(group_id)
+    if not _USE_SQLITE:
+        data = _json_load()
+        entries = data.get(gid, [])
+        return [dict(e) if isinstance(e, dict) else {"user_id": str(e)} for e in entries]
+    matches = _sqlite_records(gid)
+    return [entry for _, _, entry in matches]
+
+
+def clear_group_banned(group_id):
+    """حذف تمام افراد از لیست بن ربات برای این گروه."""
+    gid = normalize_group_id(group_id)
+    if not _USE_SQLITE:
+        data = _json_load()
+        if gid not in data:
+            return 0
+        count = len(data[gid]) if isinstance(data[gid], list) else 0
+        data.pop(gid, None)
+        save_banned(data)
+        return count
+    matches = _sqlite_records(gid)
+    if not matches:
+        return 0
+    with runtime_db.transaction() as conn:
+        conn.execute("DELETE FROM banned_users WHERE group_id=?", (gid,))
+        conn.execute("DELETE FROM banned_aliases WHERE group_id=?", (gid,))
+    return len(matches)
+
+
 def export_json(path=None):
     """Export current bans for emergency JSON-backend rollback."""
     target = Path(path) if path else FILE

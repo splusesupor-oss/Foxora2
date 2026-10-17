@@ -120,10 +120,12 @@ _ADMIN_EXACT = frozenset({
     # Clipboard management is a protected admin lane so it never waits
     # behind ordinary spam traffic.
     "کپی بورد", "کپی",
+    "لیست سکوت", "پاک لیست سکوت", "لیست اخراج", "پاک لیست اخراج",
 })
 
 _ADMIN_PREFIXES = (
     "پاک ", "بن ", "اخراج ", "سکوت ",
+    "سکوت نام", "اخراج نام",
     "ثبت ادمین", "لغو ادمین", "برکناری ادمین",
     "مجاز ", "غیر مجاز", "غیرمجاز",
     "!", "/", ".",

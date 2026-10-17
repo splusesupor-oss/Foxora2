@@ -120,7 +120,11 @@ def test_command_matching():
     check("«یک هفته» تطبیق می‌کند", ge.match_command("یک هفته") == "یک هفته")
     check("«دو هفته» تطبیق می‌کند", ge.match_command("دو هفته") == "دو هفته")
     check("«یک ماه» تطبیق می‌کند", ge.match_command("یک ماه") == "یک ماه")
-    check("فقط همین چهار دستور وجود دارد", len(ge.COMMANDS) == 4)
+    check("«۱ روز» تطبیق می‌کند", ge.match_command("۱ روز") == "۱ روز")
+    check("مدت «۱ روز» ۱ روز است", ge.duration_days("۱ روز") == 1)
+    check("«۴۰ روز» تطبیق می‌کند", ge.match_command("۴۰ روز") == "۴۰ روز")
+    check("مدت «۴۰ روز» ۴۰ روز است", ge.duration_days("۴۰ روز") == 40)
+    check("دستورها شامل ۱ تا ۴۰ روز هستند", len(ge.COMMANDS) >= 40)
 
     check("مدت «۵ روز» ۵ روز است", ge.duration_days("۵ روز") == 5)
     check("مدت «یک هفته» ۷ روز است", ge.duration_days("یک هفته") == 7)
@@ -593,12 +597,12 @@ def test_full_independence():
     # تنها وابستگیِ داخلیِ پروژه، ماژولِ مرکزیِ زمان (time_utils) است.
     check("فقط کتابخانهٔ استاندارد + ماژولِ مرکزیِ زمان import می‌شود",
           imported <= {"json", "os", "tempfile", "datetime", "pathlib",
-                       "zoneinfo", "modules"},
+                       "zoneinfo", "modules", "re"},
           f"-> {sorted(imported)}")
     import re as _re
     _internal = _re.findall(r"from\s+modules\.([\w.]+)\s+import", source)
     check("تنها ماژولِ داخلیِ پروژه time_utils (مرکزیِ زمان) است",
-          set(_internal) <= {"time_utils"}, f"-> {_internal}")
+          set(_internal) <= {"time_utils", "runtime_paths"}, f"-> {_internal}")
 
     check("فایل ذخیره‌سازی اختصاصی است",
           ge.FILE.name == "group_expiry.json"

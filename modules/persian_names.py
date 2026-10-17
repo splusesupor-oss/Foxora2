@@ -144,3 +144,68 @@ def is_persian_text(value):
 
 def is_latin_text(value):
     return bool(_LATIN_TEXT.fullmatch(str(value or "").strip()))
+
+
+def normalize_persian_name_text(text):
+    """یکسان‌سازی متن نام فارسی برای جستجو و تطبیق دقیق."""
+    if not text:
+        return ""
+    val = str(text)
+    for src, dst in _CHAR_MAP.items():
+        val = val.replace(src, dst)
+    val = _DIACRITICS.sub("", val)
+    val = re.sub(r"[^\w\s\u0600-\u06FF]", " ", val)
+    val = unicodedata.normalize("NFC", val)
+    return " ".join(val.split()).lower()
+
+
+def match_persian_name(target_phrase, first_name, last_name=None):
+    """بررسی تطبیق نام کاربر با عبارت مورد نظر.
+
+    تطبیق بر پایه واژه‌ها و نام‌های مرکب انجام می‌شود و نام‌های نامربوط
+    (مانند تطبیق جعلی با علی) پذیرفته نمی‌شوند.
+    """
+    target = normalize_persian_name_text(target_phrase)
+    if not target:
+        return False
+    full = " ".join(p for p in (first_name, last_name) if p).strip()
+    norm = normalize_persian_name_text(full)
+    if not norm:
+        return False
+
+    if norm == target:
+        return True
+
+    # عبارت درون نام با مرز واژه‌ای
+    padded_norm = f" {norm} "
+    padded_target = f" {target} "
+    if padded_target in padded_norm:
+        return True
+
+    t_tokens = target.split()
+    n_tokens = norm.split()
+
+    target_nospace = target.replace(" ", "")
+
+    # تطبیق حالت بدون فاصله با توکن‌ها (مثلاً علیرضا با علی رضا)
+    for tok in n_tokens:
+        if tok == target_nospace:
+            return True
+
+    # اگر عبارت جستجو یک کلمه باشد
+    if len(t_tokens) == 1:
+        t = t_tokens[0]
+        for tok in n_tokens:
+            if tok == t:
+                return True
+            # نام‌های ترکیبی که با عبارت آغاز می‌شوند (مثلاً علیرضا با علی)
+            if tok.startswith(t) and len(tok) >= len(t) + 2:
+                return True
+
+    # اگر عبارت چندکلمه‌ای باشد، بررسی توالی کلمات
+    if len(t_tokens) > 1:
+        for i in range(len(n_tokens) - len(t_tokens) + 1):
+            if n_tokens[i:i + len(t_tokens)] == t_tokens:
+                return True
+
+    return False

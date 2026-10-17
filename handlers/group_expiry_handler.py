@@ -34,11 +34,11 @@ from modules.owner_check import is_global_owner
 # پیامی که وقتی گروه منقضی است به غیرمالک نشان داده می‌شود.
 EXPIRED_NOTICE = (
     "⛔ مدت زمان فعال بودن این گروه به پایان رسیده است.\n\n"
-    "برای فعال‌سازی دوباره، مالک اصلی باید یکی از دستورهای "
-    "«۵ روز»، «یک هفته»، «دو هفته» یا «یک ماه» را ارسال کند."
+    "برای فعال‌سازی دوباره، مالک اصلی باید دستور انقضا "
+    "(از «۱ روز» تا «۴۰ روز») را ارسال کند."
 )
 
-CHECK_INTERVAL_SECONDS = 20
+CHECK_INTERVAL_SECONDS = 5
 
 
 def _entities(spans):
@@ -173,6 +173,7 @@ async def check_once(bot, deactivate, logger=None):
             continue
 
         message, spans = build_expired_message()
+        sent_any = False
         for target in _targets(chat_id, key):
             try:
                 sent = await bot.client.send_message(
@@ -186,6 +187,7 @@ async def check_once(bot, deactivate, logger=None):
                     continue
                 _log(logger, f"EXPIRY NOTIFICATION SENT group_id={key} chat_id={target}")
                 _log(logger, f"GROUP EXPIRY NOTICE SENT chat_id={target}")
+                sent_any = True
                 break
             except Exception as error:
                 _log_error(logger, f"GROUP EXPIRY NOTICE FAILED "
@@ -193,8 +195,11 @@ async def check_once(bot, deactivate, logger=None):
                 error_text = f"{error!r}".upper()
                 if "404" in error_text or "NOT_FOUND" in error_text:
                     mark_notified(key)
+                    sent_any = True
                     _log_error(logger, f"EXPIRY TARGET INVALID REMOVED chat_id={target}")
                     break
+        if not sent_any:
+            mark_notified(key)
         closed += 1
     return closed
 
