@@ -11,6 +11,7 @@ from foxbot.domain import Member, MemberPage, ModerationResult
 from foxbot.filters import WordFilter
 from foxbot.group_admin import GroupAdminService
 from foxbot.management import MemberManagementService
+from foxbot.platform import GroupAdministration, GroupRoleMember
 from foxbot.security import AccessController, OwnerRegistry
 from foxbot.storage import BotStore
 
@@ -30,6 +31,12 @@ class FakePlatform:
 
     async def is_native_admin(self, _group_id: str, user_id: str) -> bool:
         return str(user_id) in self.native_admin_ids
+
+    async def get_group_administration(self, _group_id: str) -> GroupAdministration:
+        return GroupAdministration(
+            owner=GroupRoleMember("owner-id", "Group Owner"),
+            admins=(GroupRoleMember("owner-id", "Group Owner"), GroupRoleMember("native-id", "Native Admin")),
+        )
 
     async def list_members_page(self, group_id: str, offset: int, limit: int, *, include_bio: bool = False) -> MemberPage:
         del include_bio
@@ -629,6 +636,25 @@ async def _scenario_legacy_admin_aliases(tmp_path) -> None:
     app.store.close()
 
 
+def test_activation_reports_live_group_access_failure_instead_of_claiming_no_owner(tmp_path) -> None:
+    async def scenario():
+        app = Harness(tmp_path)
+
+        async def denied(_group_id):
+            from foxbot.platform import GroupInfoAccessDenied
+            raise GroupInfoAccessDenied("permission denied")
+
+        app.platform.get_group_administration = denied
+        event = Event("فعال سازی", actor_id="global-owner")
+        assert await app.dispatch(event)
+        body = event.replies[-1][0]
+        assert "دسترسی سروش‌پلاس کافی نیست" in body
+        assert "یافت نشد" not in body
+        app.store.close()
+
+    asyncio.run(scenario())
+
+
 def test_legacy_admin_aliases_are_routed(tmp_path) -> None:
     asyncio.run(_scenario_legacy_admin_aliases(tmp_path))
 
@@ -663,6 +689,8 @@ async def _scenario_owner_lifecycle_and_expiry_list(tmp_path) -> None:
     assert await app.dispatch(activate)
     assert app.store.get_group_state("-1001", "group_registry")["active"] is True
     assert "روباه در گروه" in activate.replies[-1][0]
+    assert "Group Owner (شناسه: owner-id)" in activate.replies[-1][0]
+    assert "Native Admin (شناسه: native-id)" in activate.replies[-1][0]
 
     silent_repeat = Event("فعال", actor_id="global-owner")
     assert await app.dispatch(silent_repeat)

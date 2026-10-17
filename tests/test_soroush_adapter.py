@@ -10,7 +10,13 @@ import pytest
 from splusthon import SoroushClient
 from splusthon.tl import functions, types
 
-from foxbot.platform import PlatformCapabilityUnavailable
+from foxbot.platform import (
+    GroupInfoAccessDenied,
+    GroupInfoNetworkError,
+    GroupNotFound,
+    IncompleteGroupInfo,
+    PlatformCapabilityUnavailable,
+)
 from foxbot.rpc_queue import SerialRpcQueue
 from foxbot.soroush_adapter import SPlusthonAdapter
 
@@ -337,3 +343,114 @@ def test_installed_splusthon_group_send_supports_formatting_entities() -> None:
     assert "message" in parameters
     assert "formatting_entities" in parameters
     assert parameters["formatting_entities"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_channel_group_administration_uses_live_admin_filter_and_real_role_ids():
+    async def scenario():
+        creator = types.ChannelParticipantCreator(
+            user_id=101, admin_rights=types.ChatAdminRights()
+        )
+        admin = types.ChannelParticipantAdmin(
+            user_id=202,
+            promoted_by=101,
+            date=datetime.now(UTC),
+            admin_rights=types.ChatAdminRights(),
+        )
+        users = [make_user(101), make_user(202)]
+
+        class AdminClient:
+            def __init__(self):
+                self.requests = []
+
+            async def get_entity(self, _entity):
+                return type("Channel", (), {"id": 55})()
+
+            async def get_input_entity(self, entity):
+                return entity
+
+            async def __call__(self, request):
+                self.requests.append(request)
+                return SimpleNamespace(count=2, participants=[creator, admin], users=users)
+
+        client = AdminClient()
+        queue = SerialRpcQueue(min_interval_seconds=0)
+        result = await SPlusthonAdapter(client, queue).get_group_administration("g")
+        assert result.owner.user_id == "101"
+        assert result.owner.display_name == "Test User"
+        assert [item.user_id for item in result.admins] == ["101", "202"]
+        assert isinstance(client.requests[0], functions.channels.GetParticipantsRequest)
+        assert isinstance(client.requests[0].filter, types.ChannelParticipantsAdmins)
+        assert client.requests[0].hash == 0
+        await queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_basic_chat_owner_and_admins_come_from_full_chat_participant_records():
+    async def scenario():
+        participants = [
+            types.ChatParticipantCreator(user_id=303),
+            types.ChatParticipantAdmin(user_id=404, inviter_id=303, date=datetime.now(UTC)),
+        ]
+
+        class BasicChatClient:
+            async def get_entity(self, _entity):
+                return type("Chat", (), {"id": 77})()
+
+            async def __call__(self, request):
+                assert isinstance(request, functions.messages.GetFullChatRequest)
+                assert request.chat_id == 77
+                return SimpleNamespace(
+                    full_chat=SimpleNamespace(
+                        participants=types.ChatParticipants(chat_id=77, participants=participants, version=1)
+                    ),
+                    users=[make_user(303), make_user(404)],
+                )
+
+        queue = SerialRpcQueue(min_interval_seconds=0)
+        result = await SPlusthonAdapter(BasicChatClient(), queue).get_group_administration("g")
+        assert result.owner.user_id == "303"
+        assert [item.user_id for item in result.admins] == ["303", "404"]
+        await queue.close()
+
+    asyncio.run(scenario())
+
+
+def test_group_administration_rejects_incomplete_data_and_classifies_access_network_and_bad_id():
+    async def run_case(client, error_type):
+        queue = SerialRpcQueue(min_interval_seconds=0)
+        with pytest.raises(error_type):
+            await SPlusthonAdapter(client, queue).get_group_administration("g")
+        await queue.close()
+
+    class ChannelClient:
+        async def get_entity(self, _entity):
+            return type("Channel", (), {"id": 55})()
+
+        async def get_input_entity(self, entity):
+            return entity
+
+        async def __call__(self, _request):
+            return SimpleNamespace(count=1, participants=[types.ChannelParticipantCreator(
+                user_id=1, admin_rights=types.ChatAdminRights()
+            )], users=[])
+
+    class AccessClient:
+        async def get_entity(self, _entity):
+            raise type("ChatAdminRequiredError", (Exception,), {})()
+
+    class NetworkClient:
+        async def get_entity(self, _entity):
+            raise ConnectionError("offline")
+
+    class InvalidClient:
+        async def get_entity(self, _entity):
+            return type("User", (), {"id": 1})()
+
+    async def scenario():
+        await run_case(ChannelClient(), IncompleteGroupInfo)
+        await run_case(AccessClient(), GroupInfoAccessDenied)
+        await run_case(NetworkClient(), GroupInfoNetworkError)
+        await run_case(InvalidClient(), GroupNotFound)
+
+    asyncio.run(scenario())

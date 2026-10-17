@@ -10,7 +10,15 @@ from zoneinfo import ZoneInfo
 
 from foxbot.domain import ModerationKind
 from foxbot.group_admin import GroupAdminService
-from foxbot.platform import IncompleteMemberScan, PlatformCapabilityUnavailable
+from foxbot.platform import (
+    GroupInfoAccessDenied,
+    GroupInfoError,
+    GroupInfoNetworkError,
+    GroupNotFound,
+    IncompleteGroupInfo,
+    IncompleteMemberScan,
+    PlatformCapabilityUnavailable,
+)
 
 _TEHRAN = ZoneInfo("Asia/Tehran")
 _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -161,6 +169,30 @@ def _record_display(record: dict[str, Any]) -> str:
     return str(record.get("display_name") or "کاربر ناشناس").strip()
 
 
+def _group_role_display(user: Any) -> str:
+    name = str(getattr(user, "display_name", None) or _display(user)).strip()
+    user_id = str(getattr(user, "user_id", "")).strip()
+    username = str(getattr(user, "username", None) or "").strip().lstrip("@")
+    identity = f"@{username}" if username else name
+    return f"{identity} (شناسه: {user_id})" if user_id else identity
+
+
+def _group_info_error_text(exc: Exception) -> str:
+    if isinstance(exc, GroupInfoAccessDenied):
+        return "دسترسی سروش‌پلاس کافی نیست؛ عضویت حساب ربات در گروه و سطح دسترسی آن را بررسی کنید."
+    if isinstance(exc, GroupNotFound):
+        return "شناسهٔ گروه نامعتبر است یا گروه در حساب قابل دسترسی نیست."
+    if isinstance(exc, GroupInfoNetworkError):
+        return "به‌دلیل خطای اتصال، اطلاعات زندهٔ گروه دریافت نشد؛ دوباره تلاش کنید."
+    if isinstance(exc, IncompleteGroupInfo):
+        return "سروش‌پلاس پاسخ ناقص دربارهٔ مالک/ادمین‌ها برگرداند؛ نتیجهٔ ناقص نمایش داده نمی‌شود."
+    if isinstance(exc, PlatformCapabilityUnavailable):
+        return "نسخهٔ نصب‌شدهٔ SPlusthon قابلیت موردنیاز برای دریافت مالک/ادمین‌های گروه را ندارد."
+    if isinstance(exc, GroupInfoError):
+        return "سروش‌پلاس نتوانست اطلاعات گروه را ارائه کند."
+    return f"دریافت اطلاعات گروه ناموفق بود ({type(exc).__name__})."
+
+
 def _fa_math(value: int) -> str:
     digits = "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"
     return "".join(digits[int(char)] if char.isdigit() else char for char in str(value))
@@ -204,9 +236,10 @@ def _format_admin_list(
     registered: list[dict[str, Any]], native: list[Any]
 ) -> tuple[str, list[Any]]:
     registered_text = "\n".join(
-        f"★ : {_record_display(item)}" for item in registered
+        f"★ : {_record_display(item)} (شناسه: {item.get('user_id', 'نامشخص')})"
+        for item in registered
     ) if registered else "ندارد"
-    native_displays = sorted({_display(item) for item in native})
+    native_displays = sorted({_group_role_display(item) for item in native})
     group_text = "\n".join(f"☆ : {name}" for name in native_displays) if native_displays else "ندارد"
     first_title = "✍ ادمین‌های ثبت‌شده ربات"
     second_title = "✍ ادمین‌های گروه"
@@ -628,13 +661,20 @@ async def handle_group_admin_command(
                 "registered_at": group_state.get("registered_at") or datetime.now(UTC).isoformat(timespec="seconds"),
             })
             service.store.set_group_state(group_id, "group_registry", group_state)
-            registered_owner_id = service.store.get_group_owner(group_id)
-            owner_text = "ثبت‌شده" if registered_owner_id else "یافت نشد (دسترسی کافی ندارم)"
-            admins_text = "اطلاعات ادمین‌ها در دسترس نیست"
-            with suppress(Exception):
-                registered_admins, native_admins = await service.list_admins(group_id, actor_id)
-                names = sorted({_record_display(item) for item in registered_admins} | {_display(item) for item in native_admins})
-                admins_text = "\n".join(f"{index}. {name}" for index, name in enumerate(names, 1)) if names else "ندارد"
+            owner_text = "دادهٔ مالک در پاسخ سروش‌پلاس موجود نبود."
+            admins_text = "اطلاعات دریافت نشد."
+            try:
+                live_roles = await service.group_administration(group_id, actor_id)
+                if live_roles.owner is not None:
+                    owner_text = _group_role_display(live_roles.owner)
+                names = [_group_role_display(admin) for admin in live_roles.admins]
+                admins_text = "\n".join(
+                    f"{index}. {name}" for index, name in enumerate(names, 1)
+                ) if names else "در پاسخ کامل سرویس، ادمینی گزارش نشد."
+            except Exception as exc:  # noqa: BLE001 - show a categorized live API failure, never stale/fabricated roles
+                detail = _group_info_error_text(exc)
+                owner_text = detail
+                admins_text = detail
             activation_text = (
                 f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
                 f"👑 مالک گروه:\n{owner_text}\n\n"

@@ -8,7 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from foxbot.domain import Member, MemberPage, ModerationResult
-from foxbot.platform import IncompleteMemberScan, PlatformCapabilityUnavailable
+from foxbot.platform import (
+    GroupAdministration,
+    GroupInfoAccessDenied,
+    GroupInfoNetworkError,
+    GroupNotFound,
+    GroupRoleMember,
+    IncompleteGroupInfo,
+    IncompleteMemberScan,
+    PlatformCapabilityUnavailable,
+)
 from foxbot.rpc_queue import SerialRpcQueue
 
 # TL flag names used by SPlusthon's group participant restrictions. Unknown
@@ -146,6 +155,140 @@ class SPlusthonAdapter:
             )
             if part and (rendered := str(part)[:128].strip())
         ).strip()[:128]
+
+    @staticmethod
+    def _group_api_failure(exc: Exception) -> Exception:
+        """Translate known SPlusthon RPC failures without inventing data."""
+        name = type(exc).__name__.casefold()
+        if any(word in name for word in ("adminrequired", "chatadminrequired", "channelprivate", "chatforbidden", "usernotparticipant")):
+            return GroupInfoAccessDenied(
+                "SoroushPlus denied group participant details; the account may need group membership or admin access"
+            )
+        if any(word in name for word in ("chatidinvalid", "channelinvalid", "peeridinvalid", "usernameinvalid", "usernameunoccupied")):
+            return GroupNotFound("SoroushPlus could not resolve this group ID")
+        if isinstance(exc, (ConnectionError, TimeoutError, OSError, asyncio.TimeoutError)) or any(
+            word in name for word in ("connection", "timeout", "network", "rpcconnect")
+        ):
+            return GroupInfoNetworkError("SoroushPlus group lookup failed because of a network/connection problem")
+        return exc
+
+    @staticmethod
+    def _group_role_user(user: Any) -> GroupRoleMember:
+        uid = getattr(user, "id", None)
+        if uid is None:
+            raise IncompleteGroupInfo("SoroushPlus returned a role participant without a numeric user ID")
+        display = SPlusthonAdapter._user_display(user) or "کاربر بدون نام"
+        username = getattr(user, "username", None)
+        return GroupRoleMember(str(uid), display, str(username) if username else None)
+
+    async def get_group_administration(self, group_id: str | int) -> GroupAdministration:
+        """Fetch live creator/admin records through this SPlusthon client's TL API.
+
+        Basic Chat uses messages.GetFullChatRequest and its complete
+        ChatParticipants response. Channel/megagroup uses paginated
+        channels.GetParticipantsRequest(ChannelParticipantsAdmins).
+        No cache or application-owned owner setting is consulted.
+        """
+        functions, types = self._require_tl()
+        messages = getattr(functions, "messages", None)
+        channels = getattr(functions, "channels", None)
+        get_chat = getattr(messages, "GetFullChatRequest", None)
+        get_participants = getattr(channels, "GetParticipantsRequest", None)
+        admin_filter = getattr(types, "ChannelParticipantsAdmins", None)
+        if not callable(getattr(self.client, "get_entity", None)) or get_chat is None or get_participants is None or admin_filter is None:
+            raise PlatformCapabilityUnavailable("installed SPlusthon build lacks group creator/admin lookup TL methods")
+
+        gid = str(group_id)
+        try:
+            async def lookup():
+                entity = await self.client.get_entity(gid)
+                entity_kind = type(entity).__name__
+                if entity_kind == "ChatForbidden":
+                    raise GroupInfoAccessDenied("SoroushPlus resolved the group as ChatForbidden")
+                if entity_kind == "Chat":
+                    result = await self.client(get_chat(chat_id=int(entity.id)))
+                    full = getattr(result, "full_chat", None)
+                    participants_obj = getattr(full, "participants", None)
+                    if type(participants_obj).__name__ == "ChatParticipantsForbidden":
+                        raise GroupInfoAccessDenied("SoroushPlus returned ChatParticipantsForbidden for this group")
+                    if type(participants_obj).__name__ != "ChatParticipants":
+                        raise IncompleteGroupInfo("SoroushPlus full-chat response omitted ChatParticipants")
+                    records = list(getattr(participants_obj, "participants", ()) or ())
+                    users = {str(user.id): user for user in (getattr(result, "users", ()) or ()) if getattr(user, "id", None) is not None}
+                    return self._map_group_participants(records, users)
+                if entity_kind == "ChannelForbidden":
+                    raise GroupInfoAccessDenied("SoroushPlus resolved the group as ChannelForbidden")
+                if entity_kind != "Channel":
+                    raise GroupNotFound(f"resolved entity is {entity_kind}, not a SoroushPlus group")
+
+                peer = await self.client.get_input_entity(entity)
+                offset = 0
+                reported_total: int | None = None
+                participant_rows: list[Any] = []
+                user_rows: dict[str, Any] = {}
+                seen_ids: set[str] = set()
+                while True:
+                    response = await self.client(get_participants(
+                        channel=peer,
+                        filter=admin_filter(),
+                        offset=offset,
+                        limit=100,
+                        hash=0,
+                    ))
+                    count = getattr(response, "count", None)
+                    rows = list(getattr(response, "participants", ()) or ())
+                    users = list(getattr(response, "users", ()) or ())
+                    if not isinstance(count, int) or count < 0:
+                        raise IncompleteGroupInfo("SoroushPlus admin response did not include a valid count")
+                    if reported_total is not None and count != reported_total:
+                        raise IncompleteGroupInfo("SoroushPlus admin count changed during pagination")
+                    reported_total = count
+                    by_id = {str(user.id): user for user in users if getattr(user, "id", None) is not None}
+                    if len(by_id) != len(users):
+                        raise IncompleteGroupInfo("SoroushPlus returned admins without unique numeric user IDs")
+                    for participant in rows:
+                        uid = self._user_id(participant)
+                        if uid is None or uid not in by_id or uid in seen_ids:
+                            raise IncompleteGroupInfo("SoroushPlus admin response has missing/duplicate participant identities")
+                        seen_ids.add(uid)
+                        participant_rows.append(participant)
+                        user_rows[uid] = by_id[uid]
+                    if len(seen_ids) == count:
+                        break
+                    if not rows or len(rows) > 100 or offset + len(rows) >= count:
+                        raise IncompleteGroupInfo("SoroushPlus returned an incomplete admin page")
+                    offset += len(rows)
+                if reported_total is None or len(participant_rows) != reported_total:
+                    raise IncompleteGroupInfo("SoroushPlus admin listing was not complete")
+                return self._map_group_participants(participant_rows, user_rows)
+
+            return await self._rpc(gid, "group.administration", lookup, retry_safe=True)
+        except Exception as exc:
+            mapped = self._group_api_failure(exc)
+            if mapped is exc:
+                raise
+            raise mapped from exc
+
+    @classmethod
+    def _map_group_participants(cls, participants: list[Any], users: dict[str, Any]) -> GroupAdministration:
+        owner: GroupRoleMember | None = None
+        admins: list[GroupRoleMember] = []
+        seen: set[str] = set()
+        for participant in participants:
+            uid = cls._user_id(participant)
+            if uid is None or uid not in users or uid in seen:
+                raise IncompleteGroupInfo("SoroushPlus role list has a missing, unresolved, or duplicate user")
+            seen.add(uid)
+            role = cls._group_role_user(users[uid])
+            kind = type(participant).__name__.casefold()
+            if "creator" in kind:
+                if owner is not None:
+                    raise IncompleteGroupInfo("SoroushPlus returned more than one group creator")
+                owner = role
+                admins.append(role)
+            elif "admin" in kind:
+                admins.append(role)
+        return GroupAdministration(owner=owner, admins=tuple(admins))
 
     async def list_members_page(
         self, group_id: str, offset: int, limit: int, *, include_bio: bool = False

@@ -101,15 +101,24 @@ class GroupAdminService:
             group_id, "registered_admin", limit=100
         )
 
+    async def group_administration(self, group_id: str | int, actor_id: str | int):
+        """Return freshly fetched service-owned creator/admin data; never cache it."""
+        await self.require_admin(group_id, actor_id)
+        lookup = getattr(self.management.platform, "get_group_administration", None)
+        if not callable(lookup):
+            from foxbot.platform import PlatformCapabilityUnavailable
+            raise PlatformCapabilityUnavailable("SPlusthon group administration lookup is unavailable")
+        return await lookup(group_id)
+
     async def list_admins(self, group_id: str | int, actor_id: str | int) -> tuple[list[dict[str, Any]], list[Any]]:
         await self.require_admin(group_id, actor_id)
         registered = await self.registered_admins(group_id)
-        members = await self.management.list_members(group_id, actor_id)
-        native = [member for member in members if member.is_admin]
-        if any(not member.admin_status_known for member in members):
-            from foxbot.platform import IncompleteMemberScan
-            raise IncompleteMemberScan("admin status is unknown for one or more members")
-        return registered, native
+        lookup = getattr(self.management.platform, "get_group_administration", None)
+        if not callable(lookup):
+            from foxbot.platform import PlatformCapabilityUnavailable
+            raise PlatformCapabilityUnavailable("SPlusthon group administration lookup is unavailable")
+        administration = await lookup(group_id)
+        return registered, list(administration.admins)
 
     async def add_vip(
         self,
