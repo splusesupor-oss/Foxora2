@@ -1974,14 +1974,16 @@ async def send_activation_message(bot, event, chat_id, title):
         if admins else "ندارد"
     )
 
-    owner_section = f"👑 مالک گروه:\n{owner_text}"
-    admins_section = f"👮 ادمین های گروه:\n{admins_text}"
+    owner_header = "🧝‍♂ مالک گروه:"
+    admins_header = "🦹‍♂ ادمین های گروه:"
+    owner_section = f"{owner_header}\n{owner_text}"
+    admins_section = f"{admins_header}\n{admins_text}"
     activation_hint = (
         "برای آشنایی بیشتر کلمه راهنما را ارسال کنید یا بیو ربات، "
         "کانال راهنما را مطالعه کنید."
     )
     activation_text = (
-        f"🦊 روباه در گروه «{title}» فعال سازی شد ✅\n\n"
+        f"روباه در گروه «{title}» فعال سازی شد\n\n"
         f"{owner_section}\n\n{admins_section}\n\n{activation_hint}"
     )
 
@@ -1998,7 +2000,7 @@ async def send_activation_message(bot, event, chat_id, title):
         ),
         MessageEntityBold(
             offset=u16_length(activation_text[:owner_offset]),
-            length=u16_length("👑 مالک گروه:"),
+            length=u16_length(owner_header),
         ),
         MessageEntityBlockquote(
             offset=u16_length(activation_text[:admins_offset]),
@@ -2006,7 +2008,7 @@ async def send_activation_message(bot, event, chat_id, title):
         ),
         MessageEntityBold(
             offset=u16_length(activation_text[:admins_offset]),
-            length=u16_length("👮 ادمین های گروه:"),
+            length=u16_length(admins_header),
         ),
         MessageEntityBold(
             offset=u16_length(activation_text[:hint_offset]),
@@ -2596,6 +2598,40 @@ def _can_manage_group_admins(bot, chat_id, user_id, username):
     return group_owner_id is not None and str(user_id) == str(group_owner_id)
 
 
+ADMIN_PERMISSION_DENIED_TEXT = "🏕 فقط ادمین های ثبت شده مجاز هستند"
+
+
+async def _get_owner_display(bot, chat_id):
+    owner_id = get_group_owner(chat_id)
+    if not owner_id:
+        return "ثبت نشده"
+    try:
+        if hasattr(bot, "client") and hasattr(bot.client, "get_entity"):
+            entity = await bot.client.get_entity(owner_id)
+            if entity:
+                username = getattr(entity, "username", None)
+                if username and not str(username).isdigit():
+                    return "@" + str(username).lstrip("@")
+                first = getattr(entity, "first_name", "") or ""
+                last = getattr(entity, "last_name", "") or ""
+                name = f"{first} {last}".strip()
+                if name:
+                    return name
+    except Exception:
+        pass
+    return str(owner_id)
+
+
+async def _owner_permission_denied_reply(bot, event, chat_id):
+    owner_label = await _get_owner_display(bot, chat_id)
+    text = (
+        "⛔️فقط مالک اصلی ربات : @osine2\n"
+        f"⛔️ و مالک ثبت شده : {owner_label}\n"
+        "اجازه استفاده از این قابلیت را دارند"
+    )
+    await event.reply(text)
+
+
 DELETE_COMMAND_COOLDOWNS = {}
 # قفلِ گروه برای اجرای پاک: فقط یک عملیات حذف در هر گروه در لحظه اجرا می‌شود
 # تا چند ادمینِ هم‌زمان روی هم نیفتند و خطای RPC ندهند.
@@ -2916,7 +2952,7 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
 
     if clean_text in {"هوش مصنوعی فعال", "هوش مصنوعی خاموش"}:
         if not can_manage:
-            await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
+            await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
             return True
         enabled = clean_text == "هوش مصنوعی فعال"
         search_access.set_enabled(chat_id, enabled)
@@ -2933,7 +2969,7 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     is_revoke_command = clean_text in {"غیرمجاز", "غیر مجاز"} or clean_text.startswith("غیر مجاز @") or clean_text.startswith("غیرمجاز @")
     if is_grant_command or is_revoke_command:
         if not can_manage:
-            await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مدیریت هوش مصنوعی را دارند")
+            await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
             return True
         reply_id = _search_reply_message_id(event)
         target = None
@@ -2977,7 +3013,7 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
 
     if clean_text == "لیست هوش مصنوعی":
         if not can_manage:
-            await event.reply("❌ فقط مالک یا ادمین‌های گروه اجازه مشاهده این لیست را دارند")
+            await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
             return True
         rows = search_access.allowed_users(chat_id)
         if not rows:
@@ -4050,7 +4086,7 @@ async def handle_new_message(bot, event):
         if clean_text == "ثبت قوانین":
             _log_command_route(bot, clean_text, "ثبت قوانین", "group_rules.set")
             if not can_manage_group:
-                await event.reply("❌ فقط مدیر گروه اجازه ثبت قوانین دارد.")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
             else:
                 begin_rules(chat_id, user_id)
                 await event.reply("📜 لطفاً قوانین گروه را ارسال کنید.")
@@ -4059,7 +4095,7 @@ async def handle_new_message(bot, event):
         if waiting_rules(chat_id, user_id):
             if not can_manage_group:
                 cancel_rules(chat_id, user_id)
-                await event.reply("❌ فقط مدیر گروه اجازه ثبت قوانین دارد.")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
             elif save_rules(chat_id, user_id, message_text):
                 await event.reply("📜 قوانین گروه ثبت شد ✅")
             else:
@@ -4069,7 +4105,7 @@ async def handle_new_message(bot, event):
         if clean_text == "حذف قوانین":
             _log_command_route(bot, clean_text, "حذف قوانین", "group_rules.remove")
             if not can_manage_group:
-                await event.reply("❌ فقط مدیر گروه اجازه حذف قوانین دارد.")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
             elif remove_rules(chat_id):
                 await event.reply("✅ قوانین گروه حذف شد.")
             else:
@@ -4083,7 +4119,7 @@ async def handle_new_message(bot, event):
         # مدیر با ریپلای روی پیام کاربر می‌تواند حافظهٔ همان کاربر را حذف کند.
         if clean_text == "حذف حافظه":
             if not can_manage_group:
-                await event.reply("❌ فقط مدیر گروه اجازه مدیریت حافظه‌ها را دارد.")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             if not event.reply_to:
                 await event.reply("❌ روی پیام کاربر ریپلای کنید.")
@@ -4201,8 +4237,7 @@ async def handle_new_message(bot, event):
         if clean_text == "صفر":
             # فقط مالک اصلی ربات یا مالک گروه؛ ادمینِ عادی اجازه ندارد.
             if not admin_tools.has_zero_permission(chat_id, user_id):
-                await event.reply(
-                    "❌ فقط مالک اصلی ربات یا مالک گروه اجازه صفر کردن تخلفات را دارد")
+                await _owner_permission_denied_reply(bot, event, chat_id)
                 return
             if not event.reply_to:
                 await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
@@ -4233,8 +4268,7 @@ async def handle_new_message(bot, event):
             if not admin_tools.has_admin_permission(
                 chat_id, user_id, sender_username
             ):
-                await event.reply(
-                    "❌ فقط مالک یا ادمین اجازه حذف اخطار را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             if not event.reply_to:
                 await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
@@ -4267,8 +4301,7 @@ async def handle_new_message(bot, event):
             if not admin_tools.has_admin_permission(
                 chat_id, user_id, sender_username
             ):
-                await event.reply(
-                    "❌ فقط مالک یا ادمین اجازه حذف اخطارها را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             if not event.reply_to:
                 await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
@@ -4303,7 +4336,7 @@ async def handle_new_message(bot, event):
             if not admin_tools.has_admin_permission(
                 chat_id, user_id, sender_username
             ):
-                await event.reply("❌ فقط مالک یا ادمین اجازه مشاهده لاگ را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             text, entities = admin_tools.format_log(chat_id)
             await event.reply(text, formatting_entities=entities or None)
@@ -4342,7 +4375,7 @@ async def handle_new_message(bot, event):
             if not admin_tools.has_admin_permission(
                 chat_id, user_id, sender_username
             ):
-                await event.reply("❌ فقط مالک یا ادمین اجازه پاکسازی خودکار را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             admin_tools._PENDING_CLEANUP[chat_id] = {
                 "step": "day", "day": None, "time": None,
@@ -4434,9 +4467,7 @@ async def handle_new_message(bot, event):
             if not _can_manage_group_admins(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
-                await event.reply(
-                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه تغییر اخطار را دارد"
-                )
+                await _owner_permission_denied_reply(bot, event, chat_id)
                 return
             current_threshold = warning_threshold.get_threshold(
                 chat_id, bot.config_manager.get("spam_threshold", 5))
@@ -4482,9 +4513,7 @@ async def handle_new_message(bot, event):
             if not _can_manage_group_admins(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
-                await event.reply(
-                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه تغییر مجازات را دارد"
-                )
+                await _owner_permission_denied_reply(bot, event, chat_id)
                 return
             punish_header = "⚠️ تغییر مجازات"
             if punishment_mode.is_mute(chat_id):
@@ -6167,8 +6196,8 @@ async def handle_new_message(bot, event):
         )
 
         if clean_text == "ریست اخراجی ها":
-            if str(user_id) != str(get_group_owner(chat_id)):
-                await event.reply("❌ فقط مالک ثبت‌شده اجازه استفاده از این دستور را دارد")
+            if str(user_id) != str(get_group_owner(chat_id)) and not is_global_owner(user_id):
+                await _owner_permission_denied_reply(bot, event, chat_id)
                 return
 
             banned_data = load_banned()
@@ -6193,7 +6222,7 @@ async def handle_new_message(bot, event):
             if not _has_group_management_permission(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
-                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
 
             async def admin_display(user_id=None, username=None):
@@ -6272,7 +6301,7 @@ async def handle_new_message(bot, event):
 
         if clean_text == "سنجاق":
             if not _has_group_management_permission(bot, chat_id, user_id, getattr(sender, "username", None)):
-                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             if not event.reply_to:
                 await event.reply("❌ باید روی پیام موردنظر ریپلای کنید")
@@ -6303,7 +6332,7 @@ async def handle_new_message(bot, event):
 
         if clean_text in {"قفل", "باز"}:
             if not _has_group_management_permission(bot, chat_id, user_id, getattr(sender, 'username', None)):
-                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             if clean_text == "قفل":
                 bot.logger.log_info("LOCK COMMAND RECEIVED")
@@ -6534,9 +6563,7 @@ async def handle_new_message(bot, event):
             if not _can_manage_group_admins(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
-                await event.reply(
-                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
-                )
+                await _owner_permission_denied_reply(bot, event, chat_id)
                 return
 
             try:
@@ -6581,9 +6608,7 @@ async def handle_new_message(bot, event):
             if not _can_manage_group_admins(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
-                await event.reply(
-                    "❌ فقط مالک اصلی ربات یا مالک همین گروه اجازه مدیریت ادمین‌ها را دارد"
-                )
+                await _owner_permission_denied_reply(bot, event, chat_id)
                 return
 
             try:
@@ -6625,7 +6650,7 @@ async def handle_new_message(bot, event):
                 if not _can_delete_messages(
                     bot, chat_id, user_id, sender_username
                 ):
-                    await event.reply("❌ فقط مالک و ادمین‌ها اجازه حذف پیام دارند")
+                    await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                     return
 
                 parts = clean_text.split()
@@ -6634,8 +6659,8 @@ async def handle_new_message(bot, event):
                     return
 
                 requested_count = int(parts[1])
-                if requested_count < 1 or requested_count > 700:
-                    await event.reply("❌ تعداد پیام باید بین 1 تا 700 باشد")
+                if requested_count < 1 or requested_count > 800:
+                    await event.reply("❌ تعداد پیام باید بین 1 تا 800 باشد")
                     return
 
                 # cooldown و Lock برای کل گروه، نه فقط هر کاربر؛ تا چند
@@ -6693,7 +6718,7 @@ async def handle_new_message(bot, event):
                 if not _can_delete_messages(
                     bot, chat_id, user_id, sender_username
                 ):
-                    await event.reply("❌ فقط مالک و ادمین‌ها اجازه حذف پیام دارند")
+                    await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                     return
 
                 # cooldown و Lock برای کل گروه (مشترک با «پاک عدد»).
@@ -6736,7 +6761,7 @@ async def handle_new_message(bot, event):
                 if not _has_group_management_permission(
                     bot, chat_id, user_id, sender_username
                 ):
-                    await event.reply("❌ فقط ادمین‌ها اجازه اخراج دارند")
+                    await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                     return
 
                 if not event.reply_to:
@@ -6815,7 +6840,7 @@ async def handle_new_message(bot, event):
                     bot, chat_id, user_id,
                     getattr(_vip_sender, "username", None),
                 ):
-                    await event.reply("❌ فقط ادمین‌ها اجازه استفاده از vip را دارند")
+                    await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                     return
                 if clean_text == "لیست vip":
                     _vip_ids = vip_storage.list_vips(chat_id)[:20]
@@ -6896,7 +6921,7 @@ async def handle_new_message(bot, event):
             if not _has_group_management_permission(
                 bot, chat_id, user_id, getattr(sender, "username", None)
             ):
-                await event.reply("❌ فقط مالک یا ادمین ثبت‌شده اجازه استفاده دارد")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             try:
                 # --- پشتیبانی از دو حالت: ریپلای و یوزرنیم ---
@@ -7305,7 +7330,7 @@ async def handle_new_message(bot, event):
             if not _has_group_management_permission(
                 bot, chat_id, user_id, sender_username
             ):
-                await event.reply("❌ فقط ادمین‌ها اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
 
             try:
@@ -7404,7 +7429,7 @@ async def handle_new_message(bot, event):
                 if not _has_group_management_permission(
                     bot, chat_id, user_id, sender_username
                 ):
-                    await event.reply("❌ فقط ادمین‌ها اجازه استفاده از سکوت را دارند")
+                    await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                     return
 
                 if not event.reply_to:
@@ -7435,6 +7460,16 @@ async def handle_new_message(bot, event):
                     resolved_permission_chat,
                 ):
                     await event.reply("⚠️ این کاربر ادمین است و سکوت نشد")
+                    return
+
+                from modules import manual_mute_storage
+                target_key = f"{chat_id}:{target_user.id}"
+                if (
+                    manual_mute_storage.is_manual_muted(chat_id, target_user.id)
+                    or target_key in getattr(bot.tracker, "muted_users", {})
+                    or target_key in getattr(bot, "punished_users", set())
+                ):
+                    await event.reply("⚠️ این کاربر قبلا سکوت شده")
                     return
 
                 async def mute_succeeded(_result):
@@ -7502,7 +7537,7 @@ async def handle_new_message(bot, event):
             if not _has_group_management_permission(
                 bot, chat_id, user_id, sender_username
             ):
-                await event.reply("❌ فقط ادمین‌ها اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
 
             try:
@@ -7621,7 +7656,7 @@ async def handle_new_message(bot, event):
         if clean_text in ("لیست سکوت", "!لیست سکوت", "/لیست سکوت"):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             try:
                 from modules import manual_mute_storage
@@ -7659,7 +7694,7 @@ async def handle_new_message(bot, event):
         if clean_text in ("پاک لیست سکوت", "!پاک لیست سکوت", "/پاک لیست سکوت"):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             try:
                 from modules import manual_mute_storage
@@ -7703,7 +7738,7 @@ async def handle_new_message(bot, event):
         if clean_text in ("لیست اخراج", "!لیست اخراج", "/لیست اخراج"):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             try:
                 from modules import banned_storage
@@ -7741,7 +7776,7 @@ async def handle_new_message(bot, event):
         if clean_text in ("پاک لیست اخراج", "!پاک لیست اخراج", "/پاک لیست اخراج"):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             try:
                 from modules import banned_storage
@@ -7786,7 +7821,7 @@ async def handle_new_message(bot, event):
         if clean_text in ("گزارش فعالیت ادمین", "!گزارش فعالیت ادمین", "/گزارش فعالیت ادمین", "بررسی فعالیت ادمین"):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             try:
                 from modules.daily_admin_report import send_daily_admin_report_for_group
@@ -7804,7 +7839,7 @@ async def handle_new_message(bot, event):
         )):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             raw_phrase = clean_text
             for prefix in ("!سکوت نام:", "/سکوت نام:", "!سکوت نام ", "/سکوت نام ", "سکوت نام:", "سکوت نام ", "!سکوت نام", "/سکوت نام", "سکوت نام"):
@@ -7896,7 +7931,7 @@ async def handle_new_message(bot, event):
         )):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
-                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                await event.reply(ADMIN_PERMISSION_DENIED_TEXT)
                 return
             raw_phrase = clean_text
             for prefix in ("!اخراج نام:", "/اخراج نام:", "!اخراج نام ", "/اخراج نام ", "اخراج نام:", "اخراج نام ", "!اخراج نام", "/اخراج نام", "اخراج نام"):

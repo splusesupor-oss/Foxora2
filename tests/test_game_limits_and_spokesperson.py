@@ -35,7 +35,7 @@ class MockEvent:
 
 def test_spokesperson_dictionary_and_new_replies():
     """Verify new exact replies in simple_replies dictionary."""
-    assert SIMPLE_REPLIES.get("عشقم") == "جونم نانا 🐥"
+    assert SIMPLE_REPLIES.get("عشقم") == "جانم عجقم 👶"
     assert SIMPLE_REPLIES.get("رل بزنیم") == "من یک ربات هستم فاقد احساسات🏆"
     assert SIMPLE_REPLIES.get("زندگیم") == "جونم 🍫✨"
     assert SIMPLE_REPLIES.get("دوست دارم") == "ولی من دوست ندارم چون عاشقتم🥲"

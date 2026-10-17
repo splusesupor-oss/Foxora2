@@ -222,7 +222,7 @@ def friendly_reply(name, text):
             "چه خبر {name}؟ 😎", "فعلاً همه‌چی خوبه {name} ✨", "خبر خاصی نیست {name} 🦊",
         ),
         "ربات": (
-            "جانم {name} 🦊", "هستم {name} 👋", "بله {name}، بگو 😄",
+            "🤗‌ جونم {name}", "🫀 بله {name}",
         ),
     }
     options = replies.get(key)
