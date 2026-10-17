@@ -371,12 +371,12 @@ def test_mute_and_kick_by_name(tmp_path, monkeypatch):
         # ۲. اجرای «لیست سکوت»
         event_list_mute = FakeEvent(chat_id, owner, "لیست سکوت")
         await handle_new_message(bot, event_list_mute)
-        assert any("لیست افراد در سکوت:" in r and "3001" in r for r in event_list_mute.replies)
+        assert any("لیست کاربر سکوت شده توسط روباه" in r for r in event_list_mute.replies)
 
         # ۳. اجرای «پاک لیست سکوت»
         event_clear_mute = FakeEvent(chat_id, owner, "پاک لیست سکوت")
         await handle_new_message(bot, event_clear_mute)
-        assert any("تعداد: 2" in r for r in event_clear_mute.replies)
+        assert any("پاکسازی انجام شد تعداد = (" in r and "۲ نفر ) ✓" in r for r in event_clear_mute.replies)
         assert mms.get_muted_users(chat_id) == []
 
         # ۴. اجرای اخراج نام علی
@@ -387,12 +387,12 @@ def test_mute_and_kick_by_name(tmp_path, monkeypatch):
         # ۵. اجرای «لیست اخراج»
         event_list_kick = FakeEvent(chat_id, owner, "لیست اخراج")
         await handle_new_message(bot, event_list_kick)
-        assert any("لیست افراد اخراج شده:" in r and "3001" in r for r in event_list_kick.replies)
+        assert any("لیست کاربر اخراج شده توسط روباه" in r for r in event_list_kick.replies)
 
         # ۶. اجرای «پاک لیست اخراج»
         event_clear_kick = FakeEvent(chat_id, owner, "پاک لیست اخراج")
         await handle_new_message(bot, event_clear_kick)
-        assert any("تعداد: 2" in r for r in event_clear_kick.replies)
+        assert any("پاکسازی انجام شد تعداد = (" in r and "۲ نفر ) ✓" in r for r in event_clear_kick.replies)
         assert bs.get_banned_list(chat_id) == []
 
     asyncio.run(_runner())

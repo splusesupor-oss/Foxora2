@@ -178,6 +178,8 @@ except ImportError:
     types = SimpleNamespace()
     functions = SimpleNamespace()
 
+_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
 
 def _resolved_event_peer(event):
     """Read an already-resolved InputPeer from an event without any RPC."""
@@ -7593,8 +7595,8 @@ async def handle_new_message(bot, event):
 
 
 
-        # رفع سکوت کاربر با ریپلای
-        if clean_text == "رفع سکوت":
+        # رفع سکوت کاربر با ریپلای یا با یوزرنیم
+        if clean_text == "رفع سکوت" or clean_text.startswith("رفع سکوت ") or clean_text.startswith("رفع سکوت@") or clean_text.startswith(("!رفع سکوت", "/رفع سکوت")):
             sender_username = getattr(sender, "username", None)
             if not _has_group_management_permission(
                 bot, chat_id, user_id, sender_username
@@ -7603,30 +7605,70 @@ async def handle_new_message(bot, event):
                 return
 
             try:
-                if not event.reply_to:
-                    await event.reply("❌ باید روی پیام کاربر ریپلای کنید")
+                target_username_arg = None
+                normalized_cmd = clean_text.lstrip("!/").strip()
+                if normalized_cmd != "رفع سکوت":
+                    raw_arg = normalized_cmd[len("رفع سکوت"):].strip()
+                    if raw_arg.startswith("@"):
+                        raw_arg = raw_arg[1:].strip()
+                    if raw_arg:
+                        target_username_arg = raw_arg.split()[0].lstrip("@").strip()
+                    if target_username_arg is not None:
+                        if target_username_arg.isdigit():
+                            await event.reply("❌ لطفاً از نام کاربری استفاده کنید، آیدی عددی پشتیبانی نمی‌شود")
+                            return
+                        if not target_username_arg:
+                            await event.reply("❌ نام کاربری مشخص نشده است")
+                            return
+                        import re as _re_unmute
+                        if not _re_unmute.match(r"^[A-Za-z0-9_]{4,32}$", target_username_arg):
+                            await event.reply(f"❌ نام کاربری نامعتبر است: @{target_username_arg}")
+                            return
+
+                target_user = None
+                if target_username_arg:
+                    try:
+                        try:
+                            target_user = await bot.client.get_entity(target_username_arg)
+                        except Exception as _e1:
+                            try:
+                                target_user = await bot.client.get_entity(f"@{target_username_arg}")
+                            except Exception:
+                                raise _e1
+                    except Exception as e:
+                        bot.logger.log_error(f"UNMUTE RESOLVE FAILED username=@{target_username_arg} error={e!r}")
+                        await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
+                        return
+                    if not target_user or not getattr(target_user, "id", None):
+                        await event.reply(f"❌ کاربر با نام کاربری @{target_username_arg} پیدا نشد")
+                        return
+                else:
+                    if not event.reply_to:
+                        await event.reply("❌ باید روی پیام کاربر ریپلای کنید یا به صورت «رفع سکوت @username» بنویسید")
+                        return
+
+                    reply_msg = await bot.client.get_messages(
+                        chat_id,
+                        ids=event.reply_to.reply_to_msg_id
+                    )
+
+                    if not reply_msg:
+                        await event.reply("❌ پیام پیدا نشد")
+                        return
+
+                    target_user = await reply_msg.get_sender()
+
+                if not target_user:
+                    await event.reply("❌ کاربر پیدا نشد")
                     return
-
-                reply_msg = await bot.client.get_messages(
-                    chat_id,
-                    ids=event.reply_to.reply_to_msg_id
-                )
-
-                if not reply_msg:
-                    await event.reply("❌ پیام پیدا نشد")
-                    return
-
-                target_user = await reply_msg.get_sender()
 
                 async def unmute_succeeded(_result):
                     target_id = getattr(target_user, "id", None)
                     target_key = f"{chat_id}:{target_id}"
-                    # برداشتن نشان «سکوت دستی»؛ از این لحظه «آزاد» هم
-                    # مثل قبل روی این کاربر کار می‌کند.
                     try:
                         from modules import manual_mute_storage
                         manual_mute_storage.remove_manual_mute(
-                            chat_id, target_id)
+                            chat_id, target_id, username=getattr(target_user, "username", None))
                     except Exception as mm_error:
                         bot.logger.log_error(
                             f"MANUAL MUTE UNMARK FAILED: {mm_error}")
@@ -7686,13 +7728,27 @@ async def handle_new_message(bot, event):
                 if not muted_list:
                     await event.reply("لیست سکوت خالی است.")
                     return
-                lines = ["لیست افراد در سکوت:"]
+                header = "لیست کاربر سکوت شده توسط روباه"
+                lines = [header, ""]
                 for idx, item in enumerate(muted_list, 1):
-                    dname = item.get("display_name") or "بدون نام"
-                    uname = f" (@{item['username']})" if item.get("username") else ""
-                    uid = item.get("user_id") or "نامشخص"
-                    lines.append(f"{idx}. {dname}{uname} - شناسه: {uid}")
-                await event.reply("\n".join(lines))
+                    persian_idx = str(idx).translate(_PERSIAN_DIGITS)
+                    uname = item.get("username")
+                    dname = item.get("display_name")
+                    if uname:
+                        user_label = f"@{uname.lstrip('@')}"
+                    else:
+                        user_label = dname or item.get("user_id") or "بدون نام"
+                    lines.append(f"{persian_idx}-  {user_label}")
+                    lines.append("")
+                if lines and lines[-1] == "":
+                    lines.pop()
+                full_text = "\n".join(lines)
+                header_len = len(header.encode("utf-16-le")) // 2
+                entities = [
+                    MessageEntityBold(offset=0, length=header_len),
+                    MessageEntityBlockquote(offset=0, length=header_len),
+                ]
+                await event.reply(full_text, formatting_entities=entities)
             except Exception as e:
                 bot.logger.log_error(f"ERROR LIST MUTE: {e}")
                 await event.reply(f"❌ خطا در دریافت لیست سکوت:\n{e}")
@@ -7708,7 +7764,7 @@ async def handle_new_message(bot, event):
                 from modules import manual_mute_storage
                 muted_list = manual_mute_storage.get_muted_users(chat_id)
                 if not muted_list:
-                    await event.reply("هیچ کاربری در لیست سکوت نیست.")
+                    await event.reply("پاکسازی انجام شد تعداد = ( ۰ نفر ) ✓")
                     return
                 unmuted_count = 0
                 for item in muted_list:
@@ -7735,7 +7791,8 @@ async def handle_new_message(bot, event):
                         bot.logger.log_error(f"UNMUTE ERROR IN CLEAR LIST {uid}: {err}")
                 manual_mute_storage.clear_manual_mutes(chat_id)
                 admin_tools.log_action(chat_id, sender, "پاک لیست سکوت")
-                await event.reply(f"سکوت تمام افراد گروه برداشته شد. (تعداد: {unmuted_count})")
+                persian_count = str(unmuted_count).translate(_PERSIAN_DIGITS)
+                await event.reply(f"پاکسازی انجام شد تعداد = ( {persian_count} نفر ) ✓")
             except Exception as e:
                 bot.logger.log_error(f"ERROR CLEAR MUTE LIST: {e}")
                 await event.reply(f"❌ خطا در پاک کردن لیست سکوت:\n{e}")
@@ -7753,14 +7810,27 @@ async def handle_new_message(bot, event):
                 if not banned_list:
                     await event.reply("لیست اخراج خالی است.")
                     return
-                lines = ["لیست افراد اخراج شده:"]
+                header = "لیست کاربر اخراج شده توسط روباه"
+                lines = [header, ""]
                 for idx, item in enumerate(banned_list, 1):
-                    dname = item.get("display_name") or "بدون نام"
-                    uname = f" (@{item['username']})" if item.get("username") else ""
-                    uid = item.get("user_id") or "نامشخص"
-                    reason = f" (دلیل: {item['reason']})" if item.get("reason") else ""
-                    lines.append(f"{idx}. {dname}{uname} - شناسه: {uid}{reason}")
-                await event.reply("\n".join(lines))
+                    persian_idx = str(idx).translate(_PERSIAN_DIGITS)
+                    uname = item.get("username")
+                    dname = item.get("display_name")
+                    if uname:
+                        user_label = f"@{uname.lstrip('@')}"
+                    else:
+                        user_label = dname or item.get("user_id") or "بدون نام"
+                    lines.append(f"{persian_idx}-  {user_label}")
+                    lines.append("")
+                if lines and lines[-1] == "":
+                    lines.pop()
+                full_text = "\n".join(lines)
+                header_len = len(header.encode("utf-16-le")) // 2
+                entities = [
+                    MessageEntityBold(offset=0, length=header_len),
+                    MessageEntityBlockquote(offset=0, length=header_len),
+                ]
+                await event.reply(full_text, formatting_entities=entities)
             except Exception as e:
                 bot.logger.log_error(f"ERROR LIST KICK: {e}")
                 await event.reply(f"❌ خطا در دریافت لیست اخراج:\n{e}")
@@ -7776,7 +7846,7 @@ async def handle_new_message(bot, event):
                 from modules import banned_storage
                 banned_list = banned_storage.get_banned_list(chat_id)
                 if not banned_list:
-                    await event.reply("هیچ کاربری در لیست اخراج نیست.")
+                    await event.reply("پاکسازی انجام شد تعداد = ( ۰ نفر ) ✓")
                     return
                 unbanned_count = 0
                 for item in banned_list:
@@ -7804,10 +7874,27 @@ async def handle_new_message(bot, event):
                         bot.logger.log_error(f"UNBAN ERROR IN CLEAR LIST {uid}: {err}")
                 banned_storage.clear_group_banned(chat_id)
                 admin_tools.log_action(chat_id, sender, "پاک لیست اخراج")
-                await event.reply(f"تمام افراد از لیست بن حذف و رفع مسدودیت شدند. (تعداد: {unbanned_count})")
+                persian_count = str(unbanned_count).translate(_PERSIAN_DIGITS)
+                await event.reply(f"پاکسازی انجام شد تعداد = ( {persian_count} نفر ) ✓")
             except Exception as e:
                 bot.logger.log_error(f"ERROR CLEAR KICK LIST: {e}")
                 await event.reply(f"❌ خطا در پاک کردن لیست اخراج:\n{e}")
+            return
+
+        # ===== گزارش فعالیت ادمین =====
+        if clean_text in ("گزارش فعالیت ادمین", "!گزارش فعالیت ادمین", "/گزارش فعالیت ادمین", "بررسی فعالیت ادمین"):
+            sender_username = getattr(sender, "username", None)
+            if not _has_group_management_permission(bot, chat_id, user_id, sender_username):
+                await event.reply("❌ فقط مدیر ثبت‌شده، مالک ثبت‌شده یا مالک سراسری اجازه استفاده از این دستور را دارند")
+                return
+            try:
+                from modules.daily_admin_report import send_daily_admin_report_for_group
+                sent = await send_daily_admin_report_for_group(bot, chat_id, force=True)
+                if not sent:
+                    await event.reply("ℹ️ هیچ ادمینی امروز پیامی ارسال نکرده است یا اطلاعاتی یافت نشد.")
+            except Exception as e:
+                bot.logger.log_error(f"ERROR DAILY ADMIN REPORT MANUAL: {e}")
+                await event.reply(f"❌ خطا در بررسی فعالیت ادمین:\n{e}")
             return
 
         # ===== سکوت نام [عبارت] =====

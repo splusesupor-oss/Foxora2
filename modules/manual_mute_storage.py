@@ -74,20 +74,30 @@ def add_manual_mute(group_id, user_id, username=None, display_name=None):
     _save(data)
 
 
-def remove_manual_mute(group_id, user_id):
-    """حذف سکوت دستی؛ False اگر ثبت نشده باشد."""
+def remove_manual_mute(group_id, user_id=None, username=None):
+    """حذف سکوت دستی با شناسه یا نام کاربری؛ False اگر ثبت نشده باشد."""
     g = str(normalize_group_id(group_id))
     data = _load()
     items = data.get(g)
     if not isinstance(items, list):
         return False
-    uid = str(user_id)
+    uid = str(user_id) if user_id is not None else None
+    norm_uname = (username or "").lstrip("@").lower() if username else None
     found = None
     for item in items:
-        item_uid = item.get("user_id") if isinstance(item, dict) else str(item)
-        if str(item_uid) == uid:
-            found = item
-            break
+        if isinstance(item, dict):
+            item_uid = str(item.get("user_id") or "")
+            item_uname = (item.get("username") or "").lstrip("@").lower()
+            if uid and item_uid == uid:
+                found = item
+                break
+            if norm_uname and item_uname and item_uname == norm_uname:
+                found = item
+                break
+        else:
+            if uid and str(item) == uid:
+                found = item
+                break
     if found is None:
         return False
     items.remove(found)

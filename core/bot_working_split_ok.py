@@ -1277,6 +1277,13 @@ class SoroushAntiSpamBot:
             self.cleanup_tasks = {}
         asyncio.create_task(run_cleanup_watcher(self, logger=self.logger))
 
+        # 🌙 ناظر گزارش فعالیت کمترین ادمین در ساعت ۱۱ شب (۲۳:۰۰ به وقت تهران)
+        async def daily_admin_report_loop():
+            from modules.daily_admin_report import run_daily_admin_report_watcher
+            await run_daily_admin_report_watcher(self, logger=self.logger)
+
+        asyncio.create_task(daily_admin_report_loop())
+
         async def is_currently_restricted(chat_id, user):
             """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""
             try:
