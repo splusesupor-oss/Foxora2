@@ -163,7 +163,7 @@ from modules.notice_cleanup import capture_sent
 try:
     from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
     from splusthon.tl import functions
-    from splusthon import Button, types
+    from splusthon import Button, types, events
 except ImportError:
     class MessageEntityBold:
         def __init__(self, offset=0, length=0):
@@ -178,6 +178,7 @@ except ImportError:
     from types import SimpleNamespace
     types = SimpleNamespace()
     functions = SimpleNamespace()
+    events = None
 
 _PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
@@ -2358,6 +2359,25 @@ async def handle_fast_moderation_command(
                 "muted": False,
                 "target_user": target_user,
             }
+        from modules import vip_storage
+        if vip_storage.is_vip(chat_id, target_user.id):
+            return {
+                "protected_vip": True,
+                "muted": False,
+                "target_user": target_user,
+            }
+        from modules import manual_mute_storage
+        target_key = f"{chat_id}:{target_user.id}"
+        if (
+            manual_mute_storage.is_manual_muted(chat_id, target_user.id)
+            or target_key in getattr(bot.tracker, "muted_users", {})
+            or target_key in getattr(bot, "punished_users", set())
+        ):
+            return {
+                "already_muted": True,
+                "muted": False,
+                "target_user": target_user,
+            }
         # This can take one network RTT on a cold admin-list cache, but it no
         # longer holds the command lane or blocks a following mute/ban command.
         if await _is_native_group_admin(
@@ -2394,6 +2414,12 @@ async def handle_fast_moderation_command(
             return
         if isinstance(result, dict) and result.get("protected_admin"):
             await event.reply("⚠️ این کاربر ادمین است و سکوت نشد")
+            return
+        if isinstance(result, dict) and result.get("protected_vip"):
+            await event.reply("⚠️ این کاربر vip است و نمی‌تواند سکوت شود")
+            return
+        if isinstance(result, dict) and result.get("already_muted"):
+            await event.reply("⚠️ این کاربر قبلا سکوت شده")
             return
         target_user = result.get("target_user") if isinstance(result, dict) else None
         if target_user is None:
@@ -3189,6 +3215,21 @@ async def handle_new_message(bot, event):
             except Exception:
                 pass
 
+        is_edited_message = bool(
+            getattr(event, "_is_edited_message", False)
+            or (events and isinstance(event, getattr(events.MessageEdited, "Event", object)))
+            or "messageedited" in getattr(type(event), "__module__", "").lower()
+            or getattr(getattr(event, "message", None), "edit_date", None) is not None
+            or getattr(event, "is_edit", False)
+        )
+        if is_edited_message:
+            try:
+                bot.logger.log_info(
+                    f"EDITED MESSAGE DETECTED chat_id={chat_id} user_id={user_id} message_id={getattr(event.message, 'id', None)}"
+                )
+            except Exception:
+                pass
+
         # Big-spam incidents are the sole opt-in per-message ID registry.
         # Capture before any later return/lock branch can race this event.
         _capture_big_spam_message(
@@ -3223,6 +3264,16 @@ async def handle_new_message(bot, event):
             return
 
         sender_username = (getattr(sender, "username", None) or "").lstrip("@").lower()
+        is_vip_user = False
+        if not event.is_private and user_id:
+            try:
+                from modules import vip_storage
+                is_vip_user = vip_storage.is_vip(chat_id, user_id)
+            except Exception:
+                is_vip_user = False
+        if is_vip_user:
+            bot.clear_spam_lock((chat_id, user_id))
+
         # Current group authority is checked before every spam cache, banned
         # storage, tracker and lock path. Historical spam state cannot outrank
         # a current owner/admin role.
@@ -3254,7 +3305,7 @@ async def handle_new_message(bot, event):
         # Registered bot admins retain the existing full bypass policy.
         native_admin_warn_only = native_admin_bypass and not registered_admin_bypass
         admin_bypass = registered_admin_bypass
-        blocked_cache = bot.is_spam_locked((chat_id, user_id))
+        blocked_cache = False if is_vip_user else bot.is_spam_locked((chat_id, user_id))
         if native_admin_warn_only and blocked_cache:
             # This is stale state created before the native role was known.
             # It must not delete the current or later admin messages.
@@ -3274,22 +3325,22 @@ async def handle_new_message(bot, event):
             f"registered_admin={registered_admin_bypass} "
             f"native_group_admin={native_admin_bypass} "
             f"state_cleared={state_cleared} is_admin={admin_bypass} "
-            f"blocked_cache={blocked_cache} spam_history={False if admin_bypass else 'unchecked'}"
+            f"blocked_cache={blocked_cache} spam_history={False if (admin_bypass or is_vip_user) else 'unchecked'}"
         )
         status_key = _punishment_key(chat_id, user_id)
         tracker_is_banned = getattr(bot.tracker, "is_banned", None)
         tracker_is_muted = getattr(bot.tracker, "is_muted", None)
-        status_banned = False if admin_bypass else (
+        status_banned = False if (admin_bypass or is_vip_user) else (
             is_banned(chat_id, user_id, getattr(sender, "username", None))
             or (tracker_is_banned(chat_id, user_id)
                 if callable(tracker_is_banned) else False)
             or blocked_cache
         )
-        status_muted = False if admin_bypass else (
+        status_muted = False if (admin_bypass or is_vip_user) else (
             tracker_is_muted(chat_id, user_id)
             if callable(tracker_is_muted) else False
         )
-        history_count = 0 if admin_bypass else len(get_user_history(chat_id, user_id) or [])
+        history_count = 0 if (admin_bypass or is_vip_user) else len(get_user_history(chat_id, user_id) or [])
         _debug_log(bot,
             "USER MODERATION STATUS "
             f"user_id={user_id} is_banned={status_banned} "
@@ -3305,7 +3356,7 @@ async def handle_new_message(bot, event):
         )
         # === SPAM FLOW TRACE: BEFORE_TRACKER ===
         _trace_msg_id = getattr(event.message, "id", None)
-        _trace_hist_before = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
+        _trace_hist_before = 0 if (admin_bypass or is_vip_user) else len(message_tracker.get_user_recent_messages(chat_id, user_id))
         _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_TRACKER hist_before={_trace_hist_before} bot_id={id(bot)} lock_id={id(getattr(bot, 'spam_lock', set()))}"
         )
@@ -3316,10 +3367,10 @@ async def handle_new_message(bot, event):
         skip_inspect = (not event.is_private) and _is_management_command(
             message_text
         )
-        tracked_ok = False if admin_bypass or skip_inspect else message_tracker.add_message(
+        tracked_ok = False if (admin_bypass or is_vip_user or skip_inspect) else message_tracker.add_message(
             chat_id, user_id, getattr(event.message, "id", None), message_text
         )
-        _trace_hist_after = 0 if admin_bypass else len(message_tracker.get_user_recent_messages(chat_id, user_id))
+        _trace_hist_after = 0 if (admin_bypass or is_vip_user) else len(message_tracker.get_user_recent_messages(chat_id, user_id))
         _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=AFTER_TRACKER tracked_ok={tracked_ok} hist_after={_trace_hist_after}"
         )
@@ -3335,7 +3386,7 @@ async def handle_new_message(bot, event):
         banned_precheck = False
         banned_precheck_reason = None
         if (not skip_inspect and not event.is_private and not admin_bypass
-                and not native_admin_warn_only):
+                and not native_admin_warn_only and not is_vip_user):
             banned_precheck, banned_precheck_reason = bot.detector.check_banned_words(
                 message_text, chat_id
             )
@@ -3351,7 +3402,7 @@ async def handle_new_message(bot, event):
         # after the in-memory tracker update. Two clearly similar ads, or
         # one packed promotional box, queue the ban and start cleanup now.
         if (not skip_inspect and not event.is_private and not admin_bypass
-                and not native_admin_warn_only):
+                and not native_admin_warn_only and not is_vip_user):
             big_spam, big_reason, big_ids = _big_repeated_spam(
                 chat_id, user_id, message_text
             )
@@ -3382,6 +3433,7 @@ async def handle_new_message(bot, event):
                 (is_forwarded_media or album_ids)
                 and not admin_bypass
                 and not native_admin_warn_only
+                and not is_vip_user
             ):
                 profiler.mark("FORWARD_CHECK")
                 _handle_forwarded_group_message(
@@ -3394,7 +3446,7 @@ async def handle_new_message(bot, event):
                 return
 
         spam_lock_key = (chat_id, user_id)
-        _is_locked = False if admin_bypass else bot.is_spam_locked(spam_lock_key)
+        _is_locked = False if (admin_bypass or is_vip_user) else bot.is_spam_locked(spam_lock_key)
         _lock_size = len(getattr(bot, "spam_lock", set()))
         _debug_log(bot,
             f"SPAM FLOW TRACE chat_id={chat_id} user_id={user_id} message_id={_trace_msg_id} stage=BEFORE_SPAM_LOCK key={spam_lock_key!r} is_locked={_is_locked} lock_size={_lock_size} chat_id_type={type(chat_id).__name__} user_id_type={type(user_id).__name__}"
@@ -3402,6 +3454,7 @@ async def handle_new_message(bot, event):
         if (not event.is_private
                 and not admin_bypass
                 and not native_admin_warn_only
+                and not is_vip_user
                 and bot.is_spam_locked(spam_lock_key)):
             if _spam_runtime_key(chat_id, user_id) in getattr(bot, "_big_spam_incidents", {}):
                 # Ban and drain are already running. The ID was captured
@@ -3451,7 +3504,8 @@ async def handle_new_message(bot, event):
         }
         if (sender and not event.is_private and not command_priority
                 and not is_global_owner(user_id)
-                and not native_admin_warn_only):
+                and not native_admin_warn_only
+                and not is_vip_user):
             if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
                 ad_reason = ad_name_detector.reason(sender)
                 if ad_reason:
@@ -4071,7 +4125,7 @@ async def handle_new_message(bot, event):
         )
         # Native admins may receive ordinary warnings, but none of the
         # automatic delete/mute/ban branches may act on them.
-        auto_punish_protected = is_group_moderator or native_admin_warn_only
+        auto_punish_protected = is_group_moderator or native_admin_warn_only or is_vip_user
         profiler.mark("ADMIN_CHECK")
         if not is_group_moderator and not is_gif_message(event.message):
             reset_gif_history(chat_id, user_id)
@@ -4180,19 +4234,30 @@ async def handle_new_message(bot, event):
                         f"SPAM LOCK SET chat_id={chat_id} user_id={user_id} reason=duplicate_gif"
                     )
                     async def gif_mute_succeeded(_result):
-                        print("USER MUTED 3600")
+                        print("USER MUTED 10800")
                         notification_key = (chat_id, user_id)
                         now = _asyncio.get_running_loop().time()
                         notified_until = getattr(bot, "gif_spam_notification_until", {})
                         if notified_until.get(notification_key, 0) <= now:
                             if not hasattr(bot, "gif_spam_notification_until"):
                                 bot.gif_spam_notification_until = {}
-                            bot.gif_spam_notification_until[notification_key] = now + 3600
+                            bot.gif_spam_notification_until[notification_key] = now + 10800
+                            user_display = _format_banned_user(sender, user_id)
+                            first_line = f"کاربر ← {user_display}"
+                            notice_text = (
+                                f"{first_line}\n\n"
+                                "شما به دلیل ارسال گیف تکراری\n"
+                                "به مدت 3 ساعت سکوت موقت شدید"
+                            )
+                            first_line_len = len(first_line.encode("utf-16-le")) // 2
+                            entities = [
+                                MessageEntityBlockquote(offset=0, length=first_line_len),
+                                MessageEntityBold(offset=0, length=first_line_len),
+                            ]
                             await _send_moderation_notification_once(
                                 bot, chat_id, user_id, "gif_mute", event.message.id,
-                                "🔹کاربر ← "
-                                f"{_format_banned_user(sender, user_id)}\n\n"
-                                "به دلیل ارسال گیف تکراری 𝟭 ساعت سکوت شد",
+                                notice_text,
+                                formatting_entities=entities,
                             )
                             print("GIF WARNING SENT")
 
@@ -4205,7 +4270,7 @@ async def handle_new_message(bot, event):
                         user_id=user_id,
                         timeout_seconds=15,
                         operation=lambda: bot.admin_actions.mute_user(
-                            chat_id, user_id, 3600, user=sender,
+                            chat_id, user_id, 10800, user=sender,
                         ),
                         on_success=gif_mute_succeeded,
                         on_failure=gif_mute_failed,
@@ -4220,7 +4285,7 @@ async def handle_new_message(bot, event):
                     return
 
         burst_key = (chat_id, user_id)
-        if burst_key in bot.spam_burst_users:
+        if burst_key in bot.spam_burst_users and not is_vip_user:
             # Join the existing ban incident instead of a second burst worker;
             # otherwise its deleted IDs are missing from the final total and
             # its lifecycle can race a second cleanup/notice.
@@ -6753,7 +6818,7 @@ async def handle_new_message(bot, event):
             return
 
 # اخراج کاربر با ریپلای
-        if clean_text == "اخراج":
+        if clean_text in ("اخراج", "بن"):
             try:
                 sender = await event.get_sender()
                 sender_username = getattr(sender, "username", None)
@@ -6777,6 +6842,11 @@ async def handle_new_message(bot, event):
 
                 if not target_user:
                     await event.reply("❌ کاربر پیدا نشد")
+                    return
+
+                from modules import vip_storage
+                if vip_storage.is_vip(chat_id, target_user.id):
+                    await event.reply("⚠️ این کاربر vip است و نمی‌تواند اخراج شود")
                     return
 
                 async def kick_succeeded(_result):
@@ -7349,6 +7419,11 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ کاربر پیدا نشد")
                     return
 
+                from modules import vip_storage
+                if vip_storage.is_vip(chat_id, user.id):
+                    await event.reply("⚠️ این کاربر vip است و نمی‌تواند اخطار بگیرد")
+                    return
+
                 username = getattr(user, "username", None) or "کاربر"
 
                 count = bot.tracker.increment(chat_id, user.id)
@@ -7449,6 +7524,11 @@ async def handle_new_message(bot, event):
 
                 if not target_user:
                     await event.reply("❌ کاربر پیدا نشد")
+                    return
+
+                from modules import vip_storage
+                if vip_storage.is_vip(chat_id, target_user.id):
+                    await event.reply("⚠️ این کاربر vip است و نمی‌تواند سکوت شود")
                     return
 
                 # Protect native Soroush admins without fetching every member
@@ -7893,6 +7973,9 @@ async def handle_new_message(bot, event):
                         continue
                     if await _is_native_group_admin(bot, chat_id, m_id, member, resolved_permission_chat):
                         continue
+                    from modules import vip_storage
+                    if vip_storage.is_vip(chat_id, m_id):
+                        continue
 
                     fn = getattr(member, "first_name", "") or ""
                     ln = getattr(member, "last_name", "") or ""
@@ -7984,6 +8067,9 @@ async def handle_new_message(bot, event):
                     if is_admin(chat_id, m_id, m_user):
                         continue
                     if await _is_native_group_admin(bot, chat_id, m_id, member, resolved_permission_chat):
+                        continue
+                    from modules import vip_storage
+                    if vip_storage.is_vip(chat_id, m_id):
                         continue
 
                     fn = getattr(member, "first_name", "") or ""
@@ -8457,7 +8543,9 @@ async def handle_new_message(bot, event):
                 # creating a lock, deletion job, or ban attempt.
                 _asyncio.create_task(bot.admin_actions.send_warning(
                     chat_id=chat_id, username=username, user=sender,
-                    reason=reason, count=count, threshold=threshold, reply_to=None,
+                    reason=reason, count=count, threshold=threshold,
+                    reply_to=event.message.id if is_edited_message else None,
+                    is_edit=is_edited_message,
                 ), name="warn:send")
                 _clear_native_admin_moderation_state(
                     bot, chat_id, user_id, force=True
@@ -8578,7 +8666,9 @@ async def handle_new_message(bot, event):
             if count <= 5:
                 _asyncio.create_task(bot.admin_actions.send_warning(
                     chat_id=chat_id, username=username, user=sender,
-                    reason=reason, count=count, threshold=threshold, reply_to=None,
+                    reason=reason, count=count, threshold=threshold,
+                    reply_to=event.message.id if is_edited_message else None,
+                    is_edit=is_edited_message,
                 ), name="warn:send")
             if pending_spam_cleanup_ids:
                 _schedule_auto_spam_cleanup(

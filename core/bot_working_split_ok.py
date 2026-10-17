@@ -2548,28 +2548,33 @@ class SoroushAntiSpamBot:
         # ── minimal entry gate: one processing per (chat_id, message_id) ──
         # The same group update can be handed to this handler twice
         # (NewMessage then MessageEdited with the same id, or a replay).
-        # Only the first delivery may enter the pipeline; repeats inside the
-        # short TTL are dropped here, before any routing/queueing. Private
-        # chats and different messages are untouched, and a real later edit
-        # of the same message (after the TTL) is still processed.
+        # Repeats with unchanged text inside the short TTL are dropped here.
+        # Real edits (changed text or explicit MessageEdited) are allowed through.
         from collections import OrderedDict as _entry_od
         import time as _entry_time
         _entry_seen = _entry_od()
         _entry_ttl_s = 5.0
         _entry_max = 4096
 
-        def _entry_new(chat_id, message_id):
+        def _entry_new(chat_id, message_id, raw_text="", is_edit=False):
             now = _entry_time.monotonic()
             cutoff = now - _entry_ttl_s
             while _entry_seen:
-                _oldest_key, _oldest_t = next(iter(_entry_seen.items()))
+                _oldest_key, _oldest_val = next(iter(_entry_seen.items()))
+                _oldest_t = _oldest_val[0] if isinstance(_oldest_val, tuple) else _oldest_val
                 if len(_entry_seen) <= _entry_max and _oldest_t >= cutoff:
                     break
                 _entry_seen.popitem(last=False)
             key = (chat_id, message_id)
+            text_hash = hash(raw_text or "")
             if key in _entry_seen:
+                val = _entry_seen[key]
+                old_t, old_hash = val if isinstance(val, tuple) else (val, None)
+                if old_hash is not None and text_hash != old_hash:
+                    _entry_seen[key] = (now, text_hash)
+                    return True
                 return False
-            _entry_seen[key] = now
+            _entry_seen[key] = (now, text_hash)
             return True
 
         @self.client.on(events.NewMessage())
@@ -2590,8 +2595,34 @@ class SoroushAntiSpamBot:
                 if not getattr(event, "is_private", False):
                     _g_chat = getattr(event, "chat_id", None)
                     _g_msg = getattr(getattr(event, "message", None), "id", None)
-                    if _g_chat is not None and _g_msg is not None and not _entry_new(_g_chat, _g_msg):
-                        return
+                    _is_edit_ev = (
+                        isinstance(event, getattr(events.MessageEdited, "Event", object))
+                        or "messageedited" in getattr(type(event), "__module__", "").lower()
+                        or getattr(getattr(event, "message", None), "edit_date", None) is not None
+                        or getattr(event, "is_edit", False)
+                    )
+                    _g_text = ""
+                    try:
+                        _m_obj = getattr(event, "message", None)
+                        _g_text = (
+                            getattr(_m_obj, "message", None)
+                            or getattr(_m_obj, "caption", None)
+                            or ""
+                        ) if _m_obj is not None else ""
+                    except Exception:
+                        _g_text = ""
+                    if _g_chat is not None and _g_msg is not None:
+                        _was_seen = (_g_chat, _g_msg) in _entry_seen
+                        if not _entry_new(_g_chat, _g_msg, raw_text=_g_text, is_edit=_is_edit_ev):
+                            return
+                        if _is_edit_ev or _was_seen:
+                            setattr(event, "_is_edited_message", True)
+                            try:
+                                self.logger.log_info(
+                                    f"EDITED MESSAGE INCOMING chat_id={_g_chat} message_id={_g_msg} text={_g_text[:50]!r}"
+                                )
+                            except Exception:
+                                pass
             except Exception:
                 pass
             try:

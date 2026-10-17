@@ -39,6 +39,9 @@ def add_message(chat_id, user_id, message_id, text, timestamp=None):
     rows = _HISTORY[key]
     for row in rows:
         if row.get("message_id") == message_id:
+            row["text"] = _norm(text)
+            if timestamp is not None:
+                row["timestamp"] = timestamp
             return True
     rows.append({
         "chat_id": chat_id,

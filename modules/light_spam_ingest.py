@@ -121,6 +121,12 @@ def _cheap_admin_bypass(bot, chat_id, user_id):
             return True
     except Exception:
         pass
+    try:
+        from modules import vip_storage
+        if vip_storage.is_vip(chat_id, user_id):
+            return True
+    except Exception:
+        pass
     cache = getattr(bot, "native_group_admin_cache", None)
     if cache:
         try:

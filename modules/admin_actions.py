@@ -499,7 +499,7 @@ class AdminActions:
             return False
 
     async def send_warning(self, chat_id, username: str, reason: str, count: int,
-                           threshold: int, reply_to=None, user=None):
+                           threshold: int, reply_to=None, user=None, is_edit=False):
         """ارسال هشدار با قالب کوتاه و entityهای واقعی SPlus."""
         if not self.config.get("send_warning", True):
             return
@@ -520,7 +520,7 @@ class AdminActions:
         # One warning per user remains available, but a spam wave with many
         # users must not turn warnings into a P0 flood that starves deletes
         # and real owner commands on the single Soroush connection.
-        if (now_mono - gate.get(gate_key, -999.0) < 20.0
+        if not is_edit and (now_mono - gate.get(gate_key, -999.0) < 20.0
                 or now_mono - gate.get(group_gate_key, -999.0) < 3.0):
             return
         gate[gate_key] = now_mono
@@ -545,7 +545,10 @@ class AdminActions:
             digits = str(count).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
             max_digits = str(threshold).translate(str.maketrans("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵"))
             prefix = f"⚠️ کاربر {name}\n"
-            body = f"پیام شما حذف شد | {reason_line}\n"
+            if is_edit:
+                body = f"پیام ویرایش‌شده شما حذف شد | {reason_line}\n"
+            else:
+                body = f"پیام شما حذف شد | {reason_line}\n"
             warning_label = "تعداد اخطار:"
             suffix = f" {digits}/{max_digits}"
             # Keep one completely empty line between the reason and warning count.
