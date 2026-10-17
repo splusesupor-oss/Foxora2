@@ -550,7 +550,14 @@ def live_keepalive_count(sender, stale_after=STALE_LOG_SECONDS):
 
 
 def log_ping_lifecycle(logger, ping_id, state, **fields):
-    """Diagnostic state transitions for one keepalive ping_id."""
+    """Diagnostic state transitions for one keepalive ping_id.
+
+    لاگ‌های عادی چرخهٔ Ping (CREATED/SENT/RESPONSE/CLEANED) در ترمینال
+    Termux پرتکرار و خسته‌کننده‌اند؛ این state ها از INFO به DEBUG منتقل
+    شده‌اند. state های خطا (CANCELLED/EXCEPTION/TIMEOUT/...) و خطاهای واقعی
+    اتصال (reconnect/connection lost) در سطح قبلی خود (INFO/WARNING/ERROR)
+    دست‌نخورده می‌مانند.
+    """
     if logger is None:
         return
     extra = " ".join(
@@ -559,6 +566,41 @@ def log_ping_lifecycle(logger, ping_id, state, **fields):
     line = f"KEEPALIVE PING STATE ping_id={ping_id} state={state}"
     if extra:
         line = f"{line} {extra}"
+    try:
+        if str(state).upper() in _DEBUG_PING_STATES:
+            _emit_ping_debug(logger, line)
+        else:
+            logger.log_info(line)
+    except Exception:
+        pass
+
+
+# state های عادی چرخهٔ Ping که به سطح DEBUG منتقل شده‌اند.
+_DEBUG_PING_STATES = frozenset({"CREATED", "SENT", "RESPONSE", "CLEANED"})
+
+
+def _emit_ping_debug(logger, line):
+    """ثبت پیام چرخهٔ Ping در سطح DEBUG واقعی بدون تغییر منطق Ping.
+
+    → BotLogger واقعی: ``logger.logger.debug`` (سطح INFO => در تولید خاموش)
+    → لاگرهای سادهٔ تست که فقط ``log_info`` دارند: فالبک به همان کانال تا
+      مشاهده‌پذیری تست‌ها حفظ شود.
+    """
+    try:
+        debug = getattr(logger, "log_debug", None)
+        if callable(debug):
+            debug(line)
+            return
+    except Exception:
+        return
+    underlying = getattr(logger, "logger", None)
+    raw_debug = getattr(underlying, "debug", None)
+    if callable(raw_debug):
+        try:
+            raw_debug(line)
+            return
+        except Exception:
+            return
     try:
         logger.log_info(line)
     except Exception:
