@@ -38,8 +38,16 @@ from pathlib import Path
 from modules.runtime_paths import runtime_config_file
 from modules.atomic_write import write_json
 
-from splusthon.tl import functions, types
-from splusthon.tl.functions.channels import EditPhotoRequest, EditTitleRequest
+try:
+    from splusthon.tl import functions, types
+    from splusthon.tl.functions.channels import EditPhotoRequest, EditTitleRequest
+except ImportError:
+    class _Mock:
+        pass
+    functions = _Mock()
+    types = _Mock()
+    EditPhotoRequest = _Mock
+    EditTitleRequest = _Mock
 
 from modules.group_id import CHANNEL_ID_OFFSET, normalize_group_id
 

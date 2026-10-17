@@ -102,8 +102,23 @@ import os
 import asyncio
 import sys
 import time
-from dotenv import load_dotenv
-from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = lambda *a, **k: None
+
+try:
+    from splusthon.tl.types import MessageEntityBold, MessageEntityBlockquote
+except ImportError:
+    class MessageEntityBold:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
+
+    class MessageEntityBlockquote:
+        def __init__(self, offset=0, length=0):
+            self.offset = offset
+            self.length = length
 
 # Load the project .env by an absolute path.  A service/restart may launch
 # from another working directory, where bare ``load_dotenv()`` misses it.
@@ -117,19 +132,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # تلاش برای import SPlusthon
 try:
-    from splusthon import SoroushClient, events
+    from splusthon import SoroushClient, events, types
     from splusthon.sessions import StringSession
+    from splusthon.tl import functions
     SPLUSTHON_AVAILABLE = True
 except ImportError:
     SPLUSTHON_AVAILABLE = False
-    print("⚠️ کتابخانه splusthon نصب نیست. ابتدا pip install splusthon را اجرا کنید")
-    print("راهنما: pip install -r requirements.txt")
+    class _Mock:
+        pass
+    SoroushClient = _Mock
+    events = _Mock()
+    types = _Mock()
+    functions = _Mock()
+    StringSession = _Mock
 
-
-from splusthon import types
-global functions
-
-from splusthon.tl import functions
 from collections import defaultdict, deque
 
 # وصلهٔ ارسالِ فایل: درخواست‌های SaveFilePart را به media DC می‌فرستد تا
