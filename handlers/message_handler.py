@@ -1855,9 +1855,12 @@ async def get_activation_admin_info(bot, chat_id):
     owner = None
     admins = []
     admin_ids = set()
+    creator_rows_total = 0
+    creator_rows_missing_user = 0
 
     def collect_participants(users, participants):
         nonlocal owner
+        nonlocal creator_rows_total, creator_rows_missing_user
         users = {
             getattr(user, "id", None): user
             for user in users
@@ -1865,14 +1868,31 @@ async def get_activation_admin_info(bot, chat_id):
 
         for participant in participants:
             user_id = getattr(participant, "user_id", None)
+            # تشخیص مالک هم از نام کلاس و هم از پرچم is_creator (لایه‌های
+            # جدید API که Creator را به‌صورت Admin + flag می‌فرستند).
+            participant_type = participant.__class__.__name__
+            is_creator = (
+                "Creator" in participant_type
+                or bool(getattr(participant, "is_creator", False))
+            )
+            if is_creator:
+                creator_rows_total += 1
+                user = users.get(user_id)
+                if user is not None:
+                    owner = _format_group_member(user)
+                else:
+                    # ردیف Creator هست ولی User کاملش در users نیامده
+                    # (اکانت حذف‌شده/ناشناس/مجوز) — ساکت رد شدن باعث
+                    # «شناسایی نشد» می‌شد؛ در لاگ تشخیصی ثبت می‌شود و در
+                    # پیام با متن دقیقِ دلیل گزارش می‌دهیم (ID هرگز نمایش
+                    # داده نمی‌شود — قرارداد پروژه).
+                    creator_rows_missing_user += 1
+                    owner = "شناسایی شد (اما دسترسی به اطلاعاتش ممکن نیست)"
+                continue
             user = users.get(user_id)
             if not user:
                 continue
-
-            participant_type = participant.__class__.__name__
-            if "Creator" in participant_type:
-                owner = _format_group_member(user)
-            elif "Admin" in participant_type and user_id not in admin_ids:
+            if "Admin" in participant_type and user_id not in admin_ids:
                 admin_ids.add(user_id)
                 admins.append(_format_group_member(user))
 
@@ -1924,6 +1944,19 @@ async def get_activation_admin_info(bot, chat_id):
                 f"{chat_id}: channel={channel_error}; basic_chat={basic_chat_error}"
             )
 
+    # تشخیصِ دلیلِ «مالک شناسایی نشد» — یک خط٫ در فعال‌سازی گروه:
+    # فقط همین‌بارِ فعال‌سازی چاپ می‌شود، نه در حلقه‌های پیام.
+    try:
+        if owner is None:
+            bot.logger.log_error(
+                "GROUP OWNER NOT FOUND "
+                f"group_id={chat_id} creator_rows={creator_rows_total} "
+                f"missing_user_rows={creator_rows_missing_user} "
+                "reasons=creator class absent, anonymous/hidden owner, "
+                "deleted account, or insufficient access"
+            )
+    except Exception:
+        pass
     return owner, admins
 
 
