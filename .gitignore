@@ -33,6 +33,7 @@ config/manual_mutes.json
 config/group_rules.json
 config/group_words.json
 config/group_banned_words.json
+config/group_filtered_names.json
 config/group_expiry.json
 config/group_memory.json
 config/group_level.json
