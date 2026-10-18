@@ -33,12 +33,12 @@ cd ~/Foxora2
 pip install -r requirements.txt
 ```
 
-### ۳. ساخت فایل `.env` و تنظیم نشست اختصاصی `Foxora2`
+### ۳. ساخت فایل `.env` و تنظیم نشست اختصاصی `Foxora2` (بدون نیاز به API ID / API Hash)
 ```bash
 cp .env.example .env
 python3 tools/login_primary_once.py
 ```
-ابزار `tools/login_primary_once.py` شماره تلفن و کد تأیید حساب جدید سروش را یک‌بار می‌پرسد و رشتهٔ نشست را مستقیماً در متغیر اختصاصی `SOROUSH_SESSION_STRING_FOXORA2` داخل `.env` ذخیره می‌کند (بدون دست‌زدن به نشست `Foxora` یا `B2`).
+کتابخانهٔ `SPlusthon` به‌طور پیش‌فرض مقادیر رسمی کلاینت سروش‌پلاس را درون `SoroushClient(StringSession())` دارد؛ بنابراین **هیچ نیازی به وارد کردن دستی `API_ID` و `API_HASH` نیست**. ابزار `tools/login_primary_once.py` فقط شماره تلفن، کد تأیید و (در صورت فعال بودن) رمز دومرحله‌ای حساب سروش‌پلاس را می‌پرسد و رشتهٔ نشست را مستقیماً و فقط در متغیر اختصاصی `SOROUSH_SESSION_STRING_FOXORA2` داخل `~/Foxora2/.env` ذخیره می‌کند (بدون دست‌زدن به نشست یا فایل‌های `Foxora` و `B2`).
 
 همچنین می‌توانید فایل `.env` را دستی ویرایش کنید (`nano .env`):
 ```env

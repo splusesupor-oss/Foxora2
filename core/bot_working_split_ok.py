@@ -685,14 +685,12 @@ class SoroushAntiSpamBot:
         # هیچ‌وقت سشن یک instance به دیگری منتقل یا overwrite نمی‌شود.
         instance_key = (os.getenv("BOT_INSTANCE") or "foxora2").strip().upper() or "FOXORA2"
         session_str = resolve_session_string(config_get=self.config_manager.get)
-        api_id = (
+        raw_api_id = (
             os.getenv(f"API_ID_{instance_key}")
-            or os.getenv("API_ID")
             or self.config_manager.get("api_id")
         )
-        api_hash = (
+        raw_api_hash = (
             os.getenv(f"API_HASH_{instance_key}")
-            or os.getenv("API_HASH")
             or self.config_manager.get("api_hash")
         )
 
@@ -701,8 +699,16 @@ class SoroushAntiSpamBot:
         else:
             session = StringSession()
 
-        if api_id and api_hash:
-            client = SoroushClient(session, api_id, api_hash)
+        parsed_api_id = 0
+        clean_api_hash = str(raw_api_hash or "").strip()
+        if raw_api_id and clean_api_hash:
+            try:
+                parsed_api_id = int(str(raw_api_id).strip())
+            except (TypeError, ValueError):
+                parsed_api_id = 0
+
+        if parsed_api_id > 0 and clean_api_hash:
+            client = SoroushClient(session, parsed_api_id, clean_api_hash)
         else:
             client = SoroushClient(session)
         return client

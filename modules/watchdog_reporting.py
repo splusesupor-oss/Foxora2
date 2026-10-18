@@ -399,20 +399,25 @@ async def deliver_with_fresh_client(
         raise WatchdogDeliveryError(
             f"SOROUSH_SESSION_STRING_{instance_key} is not configured"
         )
-    api_id = (
+    raw_api_id = (
         os.environ.get(f"API_ID_{instance_key}")
-        or os.environ.get("API_ID")
         or config.get("api_id")
     )
-    api_hash = (
+    raw_api_hash = (
         os.environ.get(f"API_HASH_{instance_key}")
-        or os.environ.get("API_HASH")
         or config.get("api_hash")
     )
+    parsed_api_id = 0
+    clean_api_hash = str(raw_api_hash or "").strip()
+    if raw_api_id and clean_api_hash:
+        try:
+            parsed_api_id = int(str(raw_api_id).strip())
+        except (TypeError, ValueError):
+            parsed_api_id = 0
     session = StringSession(session_string)
     client = (
-        SoroushClient(session, api_id, api_hash)
-        if api_id and api_hash
+        SoroushClient(session, parsed_api_id, clean_api_hash)
+        if parsed_api_id > 0 and clean_api_hash
         else SoroushClient(session)
     )
     await asyncio.wait_for(client.connect(), timeout=60.0)
