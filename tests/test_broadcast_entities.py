@@ -106,6 +106,8 @@ class FakeBot:
 
 def run_workflow(body_text, body_entities):
     """Drive اطلاع رسانی -> body -> تایید and return (bot, preview_event)."""
+    bh.is_active = lambda gid: True
+    bh.load_groups = lambda: list(GROUPS)
     state.clear(OWNER_ID)
     bot = FakeBot()
 

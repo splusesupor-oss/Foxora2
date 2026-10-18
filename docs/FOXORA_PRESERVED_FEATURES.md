@@ -29,11 +29,11 @@
 > شبکه» نمی‌کنند و نمی‌توانند — سرور سروش پلاس هر فراخوان را جدا می‌بیند.
 > صف‌ها فقط زمان شروع، ترتیب و نرخ را کنترل می‌کنند.
 
-## ج) جداسازی مسیر اجرا
+## ج) جداسازی مسیر اجرا (Foxora2)
 
 | مورد | فایل/تست |
 |---|---|
-| مسیر مستقل `~/.foxora` برای instance «foxora» | `modules/runtime_paths.py` — تست: `tests/test_foxora_path_isolation.py` |
-| نشانگر `.bot_instance` = `foxora` | ریشهٔ مخزن — تست marker در همان فایل تست |
-| session فقط در حافظه + env اختصاصی `SOROUSH_SESSION_STRING_FOXORA` | `core/bot_working_split_ok.py` |
-| قفل PID per-instance: `~/.foxora/config/bot.pid` | `main.py`, `watchdog.py` |
+| مسیر مستقل `~/.foxora2` برای instance «foxora2» | `modules/runtime_paths.py` — تست: `tests/test_foxora_path_isolation.py` |
+| نشانگر `.bot_instance` = `foxora2` | ریشهٔ مخزن — تست marker در همان فایل تست |
+| session فقط در حافظه + env اختصاصی `SOROUSH_SESSION_STRING_FOXORA2` | `core/bot_working_split_ok.py`, `tools/login_primary_once.py` |
+| قفل PID و واچ‌داگ per-instance: `~/.foxora2/config/bot.pid` و `~/.foxora2/config/watchdog.lock` | `main.py`, `watchdog.py`, `foxora2`, `foxora2.py` |

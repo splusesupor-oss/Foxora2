@@ -19,7 +19,7 @@ def _default_instance():
             return name
     except OSError:
         pass
-    return "main"
+    return "foxora2"
 
 
 os.environ.setdefault("BOT_INSTANCE", _default_instance())
@@ -68,6 +68,18 @@ def _acquire_instance_lock():
                 alive = False
             except PermissionError:
                 alive = False  # پروس دیگر متعلق به ما نیست؛ قفل را می‌گیریم
+            if alive:
+                try:
+                    env_bytes = Path(f"/proc/{old_pid}/environ").read_bytes()
+                    cur_inst = os.environ.get("BOT_INSTANCE", "foxora2").strip()
+                    for item in env_bytes.split(b"\x00"):
+                        if item.startswith(b"BOT_INSTANCE="):
+                            other_inst = item.split(b"=", 1)[1].decode("utf-8", "ignore").strip()
+                            if other_inst and other_inst != cur_inst:
+                                alive = False
+                            break
+                except Exception:
+                    pass
             if alive:
                 print("=" * 62)
                 print(" ⛔ BOT INSTANCE ALREADY RUNNING (pid=%d)" % old_pid)
@@ -118,14 +130,14 @@ async def main():
         # خروجِ قطعی، تمیز و فقط یک بار: نشست منقضی با reconnect درمان
         # نمی‌شود؛ watchdog با همین کد خاص پروسه را دوباره بالا نمی‌آورد.
         print("=" * 62)
-        print(" ⛔ نشست سروش Foxora نامعتبر/منقضی شده است:")
+        print(" ⛔ نشست سروش Foxora2 نامعتبر/منقضی شده است:")
         print(f"    {error}")
         print()
         print(" راه‌حل (فقط یک بار انجام می‌شود):")
         print("    1) python3 tools/login_primary_once.py")
-        print("    2) ./foxora")
-        print(" نشست جدید فقط در SOROUSH_SESSION_STRING_FOXORA ذخیره می‌شود؛")
-        print(" نشست/دادهٔ ربات‌های دیگر (B2) تغییر نمی‌کند.")
+        print("    2) ./foxora2")
+        print(" نشست جدید فقط در SOROUSH_SESSION_STRING_FOXORA2 ذخیره می‌شود؛")
+        print(" نشست/دادهٔ ربات‌های دیگر (Foxora / B2) تغییر نمی‌کند.")
         print("=" * 62)
         raise SystemExit(FATAL_AUTH_EXIT_CODE)
 

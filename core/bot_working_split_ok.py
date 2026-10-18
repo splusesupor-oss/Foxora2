@@ -229,13 +229,21 @@ def is_permanent_auth_error(error) -> bool:
 def resolve_session_string(env_get=None, config_get=None, instance=None):
     """سلسله‌مراتب قطعی نشست: اختصاصی instance → عمومی → config.
 
-    برای Foxora متغیر اختصاصی ``SOROUSH_SESSION_STRING_FOXORA`` حتماً در
+    برای Foxora2 متغیر اختصاصی ``SOROUSH_SESSION_STRING_FOXORA2`` حتماً در
     اولویت اول است؛ نشست خرابِ generic/ربات دیگر فقط وقتی استفاده می‌شود
     که هیچ نشست اختصاصی‌ای تعریف نشده باشد.
     """
     if env_get is None:
         env_get = os.getenv
-    instance = (instance or os.getenv("BOT_INSTANCE", "main")).strip() or "main"
+    if not instance:
+        instance = (os.getenv("BOT_INSTANCE") or "").strip()
+    if not instance:
+        try:
+            from modules.runtime_paths import INSTANCE_NAME
+            instance = INSTANCE_NAME
+        except Exception:
+            instance = "foxora2"
+    instance = instance or "foxora2"
     value = env_get(f"SOROUSH_SESSION_STRING_{instance.upper()}")
     if value:
         return value
@@ -675,9 +683,18 @@ class SoroushAntiSpamBot:
         # سشن هر instance مستقل است: اول متغیر اختصاصی آن instance
         # (SOROUSH_SESSION_STRING_<INSTANCE>) و بعد متغیر عمومی چک می‌شود.
         # هیچ‌وقت سشن یک instance به دیگری منتقل یا overwrite نمی‌شود.
+        instance_key = (os.getenv("BOT_INSTANCE") or "foxora2").strip().upper() or "FOXORA2"
         session_str = resolve_session_string(config_get=self.config_manager.get)
-        api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
-        api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
+        api_id = (
+            os.getenv(f"API_ID_{instance_key}")
+            or os.getenv("API_ID")
+            or self.config_manager.get("api_id")
+        )
+        api_hash = (
+            os.getenv(f"API_HASH_{instance_key}")
+            or os.getenv("API_HASH")
+            or self.config_manager.get("api_hash")
+        )
 
         if session_str:
             session = StringSession(session_str)

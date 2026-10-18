@@ -173,17 +173,17 @@ def check_running_process():
         print(f"{INFO} ps در دسترس نیست")
         return
     procs = [l for l in out.splitlines()
-             if "main.py" in l and "grep" not in l]
+             if ("foxora2.py" in l or "main.py" in l) and "grep" not in l]
     if not procs:
-        print(f"{INFO} هیچ پروسهٔ main.py در حال اجرا نیست")
+        print(f"{INFO} هیچ پروسهٔ foxora2.py در حال اجرا نیست")
         print("   (اگر ربات روشن است، از همین دستگاه اجرا نشده)")
         return
-    print(f"{INFO} {len(procs)} پروسهٔ main.py:")
+    print(f"{INFO} {len(procs)} پروسهٔ ربات:")
     for proc in procs:
         print(f"     {proc[:110]}")
     if len(procs) > 1:
         print(f"{NO} بیش از یک پروسه! نسخهٔ قدیمی ممکن است هنوز زنده باشد")
-        print("   pkill -f 'python3 main.py'")
+        print("   ./foxora2 stop")
 
 
 def check_import():
@@ -253,7 +253,7 @@ def main():
         print("     git fetch origin")
         print("     git reset --hard origin/main")
         print("     find . -name __pycache__ -type d -exec rm -rf {} +")
-        print("     pkill -f 'python3 main.py'; python3 main.py")
+        print("     ./foxora2 stop; ./foxora2")
     else:
         print(f"{OK} سورس کامل و سالم است.")
         if leftovers:
@@ -261,8 +261,8 @@ def main():
             print("   find . -name __pycache__ -type d -exec rm -rf {} +")
         print("\n   اگر باز هم پاسخ نمی‌گیرید:")
         print("     ۱. گروه باید «فعال» باشد → در گروه بنویسید: فعال")
-        print("     ۲. ربات را کامل ری‌استارت کنید")
-        print("     ۳. grep ECONOMY logs/bot.log | tail -20")
+        print("     ۲. ربات را کامل ری‌استارت کنید (./foxora2 stop && ./foxora2)")
+        print("     ۳. grep ECONOMY ~/.foxora2/logs/bot.log | tail -20")
     return 1 if broken else 0
 
 

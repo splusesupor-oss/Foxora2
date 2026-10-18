@@ -34,20 +34,33 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from dotenv import dotenv_values, load_dotenv
 
-# runtime_paths chooses its directories at import time.  Load only the data-dir
-# override early (not credentials) so LOCK_FILE and the bot agree even when the
-# override lives in .env rather than the parent shell.  Termux still defaults
-# to its private ~/.local/share/soroush-bot directory.
+# runtime_paths chooses its directories at import time.  Load only the instance
+# marker and data-dir override early (not credentials) so LOCK_FILE and the bot
+# agree even when the override lives in .env rather than the parent shell.
 _BOOTSTRAP_ROOT = Path(__file__).resolve().parent
-if not os.environ.get("SOROUSH_BOT_DATA_DIR"):
+if not os.environ.get("BOT_INSTANCE"):
     try:
-        _bootstrap_data_dir = dotenv_values(
-            _BOOTSTRAP_ROOT / ".env"
-        ).get("SOROUSH_BOT_DATA_DIR")
-    except Exception:
-        _bootstrap_data_dir = None
-    if _bootstrap_data_dir:
-        os.environ["SOROUSH_BOT_DATA_DIR"] = str(_bootstrap_data_dir)
+        _bootstrap_instance = (
+            _BOOTSTRAP_ROOT / ".bot_instance"
+        ).read_text(encoding="utf-8").strip()
+        if _bootstrap_instance:
+            os.environ["BOT_INSTANCE"] = _bootstrap_instance
+    except OSError:
+        pass
+    os.environ.setdefault("BOT_INSTANCE", "foxora2")
+
+_BOOTSTRAP_INSTANCE_KEY = (
+    "SOROUSH_BOT_DATA_DIR_"
+    + re.sub(r"[^A-Za-z0-9]", "_", os.environ.get("BOT_INSTANCE", "foxora2")).upper()
+)
+try:
+    _bootstrap_env = dotenv_values(_BOOTSTRAP_ROOT / ".env")
+except Exception:
+    _bootstrap_env = {}
+if not os.environ.get(_BOOTSTRAP_INSTANCE_KEY) and _bootstrap_env.get(_BOOTSTRAP_INSTANCE_KEY):
+    os.environ[_BOOTSTRAP_INSTANCE_KEY] = str(_bootstrap_env[_BOOTSTRAP_INSTANCE_KEY])
+if not os.environ.get("SOROUSH_BOT_DATA_DIR") and _bootstrap_env.get("SOROUSH_BOT_DATA_DIR"):
+    os.environ["SOROUSH_BOT_DATA_DIR"] = str(_bootstrap_env["SOROUSH_BOT_DATA_DIR"])
 
 from modules.runtime_paths import PROJECT_ROOT, runtime_config_file, runtime_log_file
 from modules.time_utils import now_local
@@ -74,7 +87,7 @@ _SECRET_PATTERNS = (
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"), "<redacted-github-token>"),
     (
         re.compile(
-            r"(?i)\b(SOROUSH_SESSION_STRING|BOT_TOKEN|SOROUSH_BOT_TOKEN|API_HASH)"
+            r"(?i)\b((?:SOROUSH_SESSION_STRING|BOT_TOKEN|SOROUSH_BOT_TOKEN|API_HASH)(?:_[A-Z0-9_]+)?)"
             r"\s*=\s*([^\s]+)"
         ),
         r"\1=<redacted>",
@@ -403,6 +416,7 @@ class SingleInstance:
         return {
             "version": 2,
             "kind": "soroush-watchdog",
+            "instance": os.environ.get("BOT_INSTANCE", "foxora2"),
             "pid": os.getpid(),
             "start_ticks": self._process_start_ticks(os.getpid()),
             "token": self.token,
@@ -1048,7 +1062,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # کردیم؛ یک بار تلاش تحویل می‌کنیم؛ سپس تمیز خارج می‌شویم.
                 logger.critical(
                     "WATCHDOG FATAL AUTH SESSION exit_code=%s — NOT restarting; "
-                    "run tools/login_primary_once.py then ./foxora",
+                    "run tools/login_primary_once.py then ./foxora2",
                     result.returncode,
                 )
                 if not args.no_owner_report:

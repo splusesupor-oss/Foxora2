@@ -2370,7 +2370,7 @@ async def handle_fast_moderation_command(
         target_key = f"{chat_id}:{target_user.id}"
         if (
             manual_mute_storage.is_manual_muted(chat_id, target_user.id)
-            or target_key in getattr(bot.tracker, "muted_users", {})
+            or target_key in getattr(getattr(bot, "tracker", None), "muted_users", {})
             or target_key in getattr(bot, "punished_users", set())
         ):
             return {

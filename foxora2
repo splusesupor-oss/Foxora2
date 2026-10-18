@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Foxora2 launcher — اجرای ربات مستقل Foxora2 بدون هیچ تداخلی با Foxora یا B2.
+#
+# استفاده:
+#   ./foxora2            اجرا با واچ‌داگ (پیشنهادی)
+#   ./foxora2 direct     اجرای مستقیم بدون واچ‌داگ
+#   ./foxora2 status     نمایش وضعیت و مسیر داده‌ها
+#   ./foxora2 stop       توقف فقط ربات Foxora2 (Foxora و B2 دست‌نخورده می‌مانند)
+
+set -e
+
+FOXORA2_DIR="$(cd "$(dirname "$0")" && pwd)"
+FOXORA2_DATA="${SOROUSH_BOT_DATA_DIR_FOXORA2:-$HOME/.foxora2}"
+PID_FILE="$FOXORA2_DATA/config/bot.pid"
+WATCHDOG_LOCK="$FOXORA2_DATA/config/watchdog.lock"
+
+export BOT_INSTANCE=foxora2
+cd "$FOXORA2_DIR"
+
+_is_foxora2_pid() {
+    local pid="$1"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+    if [ -r "/proc/$pid/environ" ]; then
+        if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q '^BOT_INSTANCE='; then
+            tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q '^BOT_INSTANCE=foxora2$' || return 1
+            return 0
+        fi
+    fi
+    if [ -r "/proc/$pid/cmdline" ]; then
+        tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Eq "(foxora2\.py|$FOXORA2_DIR)" || return 1
+    fi
+    return 0
+}
+
+_read_watchdog_pid() {
+    if [ -f "$WATCHDOG_LOCK" ]; then
+        python3 - "$WATCHDOG_LOCK" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+    pid = int(data.get("pid") or 0)
+    if pid > 0:
+        print(pid)
+except Exception:
+    pass
+PY
+    fi
+}
+
+case "${1:-run}" in
+    status)
+        echo "FOXORA2_DIR : $FOXORA2_DIR"
+        echo "DATA_DIR    : $FOXORA2_DATA"
+        echo "PID file    : $PID_FILE"
+        echo "WATCHDOG    : $WATCHDOG_LOCK"
+        wd_pid="$(_read_watchdog_pid)"
+        bot_pid=""
+        if [ -f "$PID_FILE" ]; then
+            bot_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+        fi
+        if [ -n "$bot_pid" ] && _is_foxora2_pid "$bot_pid"; then
+            echo "STATUS      : RUNNING (pid=$bot_pid${wd_pid:+, watchdog=$wd_pid})"
+        elif [ -n "$wd_pid" ] && _is_foxora2_pid "$wd_pid"; then
+            echo "STATUS      : RUNNING (watchdog=$wd_pid)"
+        else
+            echo "STATUS      : STOPPED"
+        fi
+        ;;
+    stop)
+        stopped_any=0
+        wd_pid="$(_read_watchdog_pid)"
+        if [ -n "$wd_pid" ] && _is_foxora2_pid "$wd_pid"; then
+            kill "$wd_pid" 2>/dev/null || true
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                kill -0 "$wd_pid" 2>/dev/null || break
+                sleep 0.2
+            done
+            echo "Foxora2 watchdog (pid=$wd_pid) stopped."
+            stopped_any=1
+        fi
+        rm -f "$WATCHDOG_LOCK"
+        if [ -f "$PID_FILE" ]; then
+            pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+            if [ -n "$pid" ] && _is_foxora2_pid "$pid"; then
+                kill "$pid" 2>/dev/null || true
+                for _ in 1 2 3 4 5 6 7 8 9 10; do
+                    kill -0 "$pid" 2>/dev/null || break
+                    sleep 0.2
+                done
+                echo "Foxora2 (pid=$pid) stopped."
+                stopped_any=1
+            fi
+            rm -f "$PID_FILE"
+        fi
+        if [ "$stopped_any" -eq 0 ]; then
+            echo "Foxora2 is not running."
+        fi
+        ;;
+    direct)
+        exec python3 foxora2.py
+        ;;
+    run|watchdog|"")
+        exec python3 watchdog.py --replace -- python3 -u foxora2.py
+        ;;
+    *)
+        echo "Usage: ./foxora2 [run|direct|status|stop]"
+        exit 2
+        ;;
+esac

@@ -29,7 +29,7 @@ from economy import storage
 from economy.coins import accounts
 from economy.transactions import ledger
 
-LEGACY_FILE = ROOT / "config" / "coins.json"
+LEGACY_FILE = storage.LEGACY_COINS_FILE
 REFERENCE = "legacy_coins_import:v1"
 
 

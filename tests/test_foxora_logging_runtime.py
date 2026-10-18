@@ -80,10 +80,10 @@ def test_verbose_mode_restores_noisy_lines(monkeypatch) -> None:
 
 @pytest.mark.timeout(60)
 def test_log_rotation_stays_bounded_inside_foxora_home(tmp_path: Path) -> None:
-    """End-to-end: >1MB of logs rotates bot.log and stays inside ~/.foxora."""
+    """End-to-end: >1MB of logs rotates bot.log and stays inside ~/.foxora2."""
     env = os.environ.copy()
     env["HOME"] = str(tmp_path)
-    env["BOT_INSTANCE"] = "foxora"
+    env["BOT_INSTANCE"] = "foxora2"
     env["BOT_LOG_MAX_BYTES"] = str(1024 * 1024)
     env["BOT_LOG_BACKUPS"] = "2"
     env.pop("BOT_VERBOSE_LOGS", None)
@@ -109,13 +109,14 @@ def test_log_rotation_stays_bounded_inside_foxora_home(tmp_path: Path) -> None:
         cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
-    log_dir = tmp_path / ".foxora" / "logs"
+    log_dir = tmp_path / ".foxora2" / "logs"
     bot_log = log_dir / "bot.log"
     rotated = log_dir / "bot.log.1"
     assert bot_log.exists(), f"missing active log: {list(log_dir.glob('*'))}"
     assert rotated.exists(), "rotation did not produce a backup file"
     assert bot_log.stat().st_size <= 1024 * 1024 * 1.1
-    # Nothing leaked into a B2 directory.
+    # Nothing leaked into Foxora 1 or B2 directories.
+    assert not (tmp_path / ".foxora").exists()
     assert not (tmp_path / ".local" / "share" / "soroush-bot").exists()
     # The isolated subprocess must not create a project-tree log either.
     # (Other tests running under the default instance may already have left

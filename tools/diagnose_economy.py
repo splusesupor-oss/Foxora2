@@ -154,9 +154,10 @@ def check_database():
 # ---------------------------------------------------------------------------
 def check_groups():
     line("۴) وضعیت گروه‌ها (دستور فقط در گروه فعال کار می‌کند)")
-    path = ROOT / "config" / "groups.json"
+    from modules.runtime_paths import runtime_config_file
+    path = runtime_config_file("groups.json")
     if not path.exists():
-        print(f"{NO} فایل groups.json وجود ندارد")
+        print(f"{NO} فایل groups.json وجود ندارد ({path})")
         return
     data = json.loads(path.read_text(encoding="utf-8"))
     active = {k: v for k, v in data.items() if v.get("active")}

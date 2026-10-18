@@ -1,97 +1,78 @@
-# 🦊 Foxora
+# 🦊 Foxora2 — ربات مدیریت گروه و ضد اسپم سروش پلاس (نسخهٔ دوم کاملاً مستقل)
 
-ربات مدیریت و ضد-هرزنامهٔ **سروش پلاس** — نسخهٔ مستقل ساخته‌شده از روی کد
-واقعی و فعلی ربات **B2** (`splusesupor-oss/soroush-plus-antispam-bot-v2`)،
-همراه با قابلیت‌های حفظ‌شدهٔ لاگ/CPU/صفِ نسخهٔ قبلی Foxora.
+**Foxora2** یک کپی کامل و کاملاً مستقل از ربات Foxora برای سروش پلاس است. تمام قابلیت‌ها، دستورات، بازی‌ها، اقتصاد، مدیریت گروه، قالب‌بندی پیام‌ها (Bold / Quote / Spoiler) و فهرست‌های داده بدون هیچ تغییری حفظ شده‌اند، اما **مسیر نصب، مسیر داده‌ها، دیتابیس، لاگ‌ها، فایل قفل پروسه (PID / Watchdog) و نشست (Session)** کاملاً از ربات `Foxora` و ربات `B2` جدا هستند.
 
-## ویژگی‌های کلیدی
+---
 
-- ضد-اسپم لایه‌ای (لینک، شماره، یوزرنیم، کلمات ممنوعه، فوروارد، GIF و رسانه)
-- مدیریت کامل گروه: سکوت/بن/اخطار، قوانین، وایت‌لیست، انقضای گروه
-- اقتصاد داخلی (سکه، فروشگاه، رتبه‌بندی) و بانک سرگرمی/بازی‌ها
-- Watchdog با ری‌استارت خودکار و گزارش خصوصی به مالک
-- معماری صف کران‌دار و منصفانه برای درخواست‌ها + governor اتصال مشترک
-- لاگ غیرمسدودکننده با چرخش خودکار و سرکوب خطوط پرتکرار
+## 🔒 جداسازی کامل از ربات‌های دیگر (`Foxora` و `B2`)
 
-## مسیر اجرا و جدایی از B2
+| مورد | ربات `Foxora2` (این مخزن) | ربات `Foxora` (اصلی) | ربات `B2` |
+|---|---|---|---|
+| پوشهٔ کد پروژه | `~/Foxora2` | `~/Foxora` | پوشهٔ جداگانهٔ B2 |
+| شناسهٔ نمونه (`.bot_instance` / `BOT_INSTANCE`) | `foxora2` | `foxora` | `main` |
+| مسیر داده‌ها، دیتابیس و لاگ | `~/.foxora2/` | `~/.foxora/` | `~/.local/share/soroush-bot/` |
+| دیتابیس SQLite | `~/.foxora2/db/bot.sqlite3` | `~/.foxora2` ندارد (`~/.foxora/db/bot.sqlite3`) | `~/.local/share/soroush-bot/db/bot.sqlite3` |
+| فایل قفل پروسه و واچ‌داگ | `~/.foxora2/config/bot.pid` و `watchdog.lock` | `~/.foxora/config/bot.pid` و `watchdog.lock` | مسیر مستقل B2 |
+| متغیر نشست در `.env` | `SOROUSH_SESSION_STRING_FOXORA2` | `SOROUSH_SESSION_STRING_FOXORA` | `SOROUSH_SESSION_STRING` |
+| دستور اجرا / توقف | `./foxora2` و `python3 foxora2.py` | `./foxora` و `python3 foxora.py` | مستقل |
 
-| مورد | Foxora | B2 (دست‌نخورده) |
-|---|---|---|
-| دایرکتوری پروژه | `~/Foxora` | مسیر clone خودش |
-| دادهٔ اجرایی (session/DB/config/log/backup) | `~/.foxora` | `~/.local/share/soroush-bot-bot2` |
-| فایل اجرای اصلی | `foxora.py` | `bot2.py` |
-| دستور اجرا | `./foxora` | `b2` |
-| نشانگر instance | `.bot_instance` = `foxora` | `bot2` |
-| متغیر session | `SOROUSH_SESSION_STRING_FOXORA` | `SOROUSH_SESSION_STRING_BOT2` |
+> ⚠️ **مهم:** یک حساب سروش (یک `SOROUSH_SESSION_STRING`) نمی‌تواند همزمان روی دو پروسهٔ فعال اجرا شود؛ سرور MTProto آپدیت‌ها را فقط به یکی می‌دهد. برای اجرای همزمان `Foxora2` در کنار `Foxora` و `B2`، حتماً یک حساب سروش جداگانه برای `Foxora2` بسازید و نشست آن را در `SOROUSH_SESSION_STRING_FOXORA2` بگذارید.
 
-Foxora هیچ فایل، session یا دیتابیسی از B2 را نمی‌خواند و نمی‌نویسد؛ قفل PID
-هر instance جداست و دو ربات می‌توانند هم‌زمان روی یک دستگاه کار کنند.
+---
 
-## نصب (Termux)
+## 📦 نصب و راه‌اندازی در Termux یا لینوکس
 
+### ۱. کلون کردن در پوشهٔ مستقل
 ```bash
-git clone https://github.com/tbom8670-afk/Foxora.ai.git ~/Foxora
-cd ~/Foxora
+git clone https://github.com/splusesupor-oss/Foxora2.git ~/Foxora2
+cd ~/Foxora2
+```
+
+### ۲. نصب پیش‌نیازها
+```bash
 pip install -r requirements.txt
-cp .env.example .env   # سپس session را داخل .env پر کنید
 ```
 
-### اجرا
-
+### ۳. ساخت فایل `.env` و تنظیم نشست اختصاصی `Foxora2`
 ```bash
-cd ~/Foxora
-./foxora           # اجرا با Watchdog (پیشنهادی؛ ری‌استارت خودکار)
-./foxora direct    # اجرای مستقیم بدون Watchdog
-./foxora status    # وضعیت
-./foxora stop      # توقف فقط Foxora
+cp .env.example .env
+python3 tools/login_primary_once.py
+```
+ابزار `tools/login_primary_once.py` شماره تلفن و کد تأیید حساب جدید سروش را یک‌بار می‌پرسد و رشتهٔ نشست را مستقیماً در متغیر اختصاصی `SOROUSH_SESSION_STRING_FOXORA2` داخل `.env` ذخیره می‌کند (بدون دست‌زدن به نشست `Foxora` یا `B2`).
+
+همچنین می‌توانید فایل `.env` را دستی ویرایش کنید (`nano .env`):
+```env
+BOT_INSTANCE=foxora2
+SOROUSH_SESSION_STRING_FOXORA2=رشته_نشست_حساب_جدید_سروش
 ```
 
-اولین اجرا برای ساخت session از شما ورود تعاملی می‌خواهد؛ session فقط در
-حافظه نگه داشته می‌شود (StringSession) و فایلی روی دیسک نوشته نمی‌شود.
+---
 
-### مالک
+## ▶️ اجرای ربات `Foxora2`
 
-مالک در `config/owner.json` (canonical) تعریف می‌شود و در اولین اجرا به
-`~/.foxora/config/owner.json` هم‌گام می‌شود.
+| دستور | عملکرد |
+|---|---|
+| `./foxora2` | اجرای ربات با واچ‌داگ اختصاصی (پیشنهادی برای اجرای دائمی) |
+| `./foxora2 direct` یا `python3 foxora2.py` | اجرای مستقیم بدون واچ‌داگ |
+| `./foxora2 status` | نمایش وضعیت فعلی، PID و مسیر داده‌های `Foxora2` |
+| `./foxora2 stop` | توقف **فقط** ربات `Foxora2` (ربات‌های `Foxora` و `B2` دست‌نخورده می‌مانند) |
 
-## ساختار
-
-```
-foxora.py        لانچر instance (BOT_INSTANCE=foxora → ~/.foxora)
-foxora           اسکریپت فرمان run/direct/stop/status
-main.py          entrypoint اصلی (ارثی از B2)
-watchdog.py      ناظر دائمی crash/restart
-core/            مغز ربات (SoroushAntiSpamBot)
-handlers/        روترهای پیام/ادمین/پخش/اقتصاد/بازی/…
-modules/         ماژول‌ها: runtime_paths, rpc_governor, moderation_queue,
-                 outgoing_sender, logger_module, rpc_queue, fair_queue,
-                 fair_delete_queue (قابلیت‌های محفوظ Foxora) و…
-economy/         سکه/فروشگاه/رتبه‌بندی
-tests/           ~۱۱۰ تست B2 + تست‌های Foxora (مسیر/صف/لاگ/pacing)
-docs/FOXORA_PRESERVED_FEATURES.md   نگاشت دقیق قابلیت‌های حفظ‌شده
-```
-
-## قابلیت‌های حفظ‌شده از Foxora قبلی
-
-قبل از جایگزینی با کد B2، قابلیت‌های زیر شناسایی و **حفظ** شدند:
-
-1. **بهینه‌سازی لاگ و CPU** — لاگ غیرمسدود با صف کران‌دار و drop-on-saturation،
-   سرکوب لاگ‌های پرتکرار پیام‌محور (`BOT_VERBOSE_LOGS`)، چرخش خودکار
-   (`BOT_LOG_MAX_BYTES/BOT_LOG_BACKUPS`).
-2. **صف درخواست‌های گروه‌ها** — `SerialRpcQueue` (یک RPC در هر لحظه، fairness
-   بین گروه‌ها، bounded، dedupe فقط با کلید صریح)، `FairModerationQueue`،
-   `FairDeleteQueue` و knob pacing `RPC_MIN_INTERVAL_SECONDS` که روی مسیر
-   زندهٔ `RpcGovernor` هم اعمال می‌شود.
-
-نگاشت کامل: [`docs/FOXORA_PRESERVED_FEATURES.md`](docs/FOXORA_PRESERVED_FEATURES.md)
-
-## تست
-
+اگر `./foxora2` خطای دسترسی داد، یک‌بار دستور زیر را بزنید:
 ```bash
-python3 -m pytest tests/ -q
+chmod +x foxora2 foxora2.py
 ```
 
-## مشارکت‌های شخص ثالث
+---
 
-کد پایه از مخزن «soroush-plus-antispam-bot-v2» (ربات B2) منشعب شده است؛ به
-توسعه‌دهندگان آن اعتبار تعلق دارد.
+## 🗂️ مسیر ذخیرهٔ اطلاعات `Foxora2`
+
+تمام فایل‌های زمان اجرا به صورت خودکار در `~/.foxora2` ساخته می‌شوند:
+- `~/.foxora2/config/` — گروه‌های فعال (`groups.json`)، ادمین‌ها (`admins.json`)، قوانین، کلمات، اقتصاد، کلیپ‌بورد، قفل پروسه (`bot.pid` و `watchdog.lock`) و تنظیمات
+- `~/.foxora2/db/bot.sqlite3` — دیتابیس SQLite اختصاصی `Foxora2`
+- `~/.foxora2/logs/` — لاگ‌های زمان اجرا (`bot_runtime.log`، `watchdog.log`)، پیام‌های حذف‌شده و آمار گروه‌ها
+- `~/.foxora2/backups/` و `~/.foxora2/archive/` — پشتیبان‌ها و آرشیوها
+
+در صورت نیاز به تغییر مسیر داده‌ها می‌توانید متغیر زیر را در `.env` قرار دهید:
+```env
+SOROUSH_BOT_DATA_DIR_FOXORA2=/custom/path/for/foxora2
+```

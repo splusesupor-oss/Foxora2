@@ -1,9 +1,12 @@
-"""Foxora runtime path isolation tests.
+"""Foxora2 runtime path isolation tests.
 
-Every runtime artifact of the Foxora instance (session state files, database,
-config, owner, logs, temp files, backups) must live inside its own
-independent directory ``~/.foxora`` — never inside a B2 directory
-(``~/.local/share/soroush-bot*``) and never inside the project tree.
+ثابت می‌کند که وقتی ربات با هویت Foxora2 بالا می‌آید:
+  * همهٔ فایل‌های زمان اجرا (config, logs, db, backups, archive, bot.pid)
+    زیر ``~/.foxora2`` قرار می‌گیرند.
+  * هیچ فایلی داخل مسیرهای Foxora (``~/.foxora``) یا B2
+    (``~/.local/share/soroush-bot*``) ساخته نمی‌شود.
+  * حتی اگر در محیط شل متغیر عمومی ``SOROUSH_BOT_DATA_DIR`` به مسیر پیش‌فرض
+    Foxora یا B2 اشاره کند، Foxora2 به مسیر اشتراکی نمی‌نویسد.
 """
 from __future__ import annotations
 
@@ -13,93 +16,96 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _run_describe(tmp_path: Path, extra_env: dict | None = None,
-                  remove_instance: bool = False) -> dict:
+def _probe_paths(extra_env: dict[str, str], home: Path) -> dict:
     env = os.environ.copy()
-    env["HOME"] = str(tmp_path)
-    env["PREFIX"] = "/data/data/com.termux/files/usr"  # exercise the Termux branch
-    env.pop("SOROUSH_BOT_DATA_DIR", None)
-    for key in list(env):
-        if key.startswith("SOROUSH_BOT_DATA_DIR_"):
-            env.pop(key)
-    if remove_instance:
-        env.pop("BOT_INSTANCE", None)
-    else:
-        env["BOT_INSTANCE"] = "foxora"
-    if extra_env:
-        env.update(extra_env)
+    for k in list(env):
+        if k.startswith("SOROUSH_BOT_DATA_DIR") or k == "BOT_INSTANCE":
+            env.pop(k, None)
+    env["HOME"] = str(home)
+    env.update(extra_env)
     code = (
-        "import json\n"
-        "from modules import runtime_paths\n"
-        "print(json.dumps(runtime_paths.describe()))\n"
+        "import json; "
+        "from modules import runtime_paths as rp; "
+        "info = rp.describe(); "
+        "info['pid_file'] = str(rp.runtime_config_file('bot.pid', migrate=False)); "
+        "info['groups_file'] = str(rp.runtime_config_file('groups.json', migrate=False)); "
+        "info['log_file'] = str(rp.runtime_log_file('bot.log', migrate=False)); "
+        "info['db_file'] = str(rp.runtime_db_file('bot.sqlite3')); "
+        "print(json.dumps(info))"
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=120,
+    out = subprocess.check_output(
+        [sys.executable, "-c", code], cwd=str(PROJECT_ROOT), env=env, text=True
     )
-    assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout.strip().splitlines()[-1])
+    return json.loads(out.strip().splitlines()[-1])
 
 
-def test_foxora_instance_uses_isolated_home_dir(tmp_path: Path) -> None:
-    info = _run_describe(tmp_path)
-    assert info["instance"] == "foxora"
-    expected = str((tmp_path / ".foxora").resolve())
-    assert info["data_dir"] == expected
-    for key in ("config_dir", "log_dir", "db_dir"):
-        assert info[key].startswith(expected + os.sep), (key, info[key])
-    # Never inside a B2/soroush-bot directory or the project tree.
-    for key in ("data_dir", "config_dir", "log_dir", "db_dir"):
-        assert "soroush-bot" not in info[key]
-        assert not info[key].startswith(str(REPO_ROOT))
+def test_marker_file_identifies_foxora2(tmp_path):
+    marker = (PROJECT_ROOT / ".bot_instance").read_text(encoding="utf-8").strip()
+    assert marker == "foxora2"
+
+    info = _probe_paths({}, tmp_path)
+    expected = (tmp_path / ".foxora2").resolve()
+    assert info["instance"] == "foxora2"
+    assert Path(info["data_dir"]) == expected
+    assert Path(info["config_dir"]) == expected / "config"
+    assert Path(info["log_dir"]) == expected / "logs"
+    assert Path(info["db_dir"]) == expected / "db"
+    assert Path(info["pid_file"]) == expected / "config" / "bot.pid"
+    assert Path(info["groups_file"]) == expected / "config" / "groups.json"
+    assert Path(info["log_file"]) == expected / "logs" / "bot.log"
+    assert Path(info["db_file"]) == expected / "db" / "bot.sqlite3"
+    assert not (tmp_path / ".foxora").exists()
+    assert not (tmp_path / ".local" / "share" / "soroush-bot").exists()
+    assert not (tmp_path / ".local" / "share" / "soroush-bot-foxora2").exists()
 
 
-def test_bot_instance_marker_file_keeps_foxora_without_env(tmp_path: Path) -> None:
-    # The shipped .bot_instance marker must pin direct `python3 main.py`
-    # runs to the foxora instance even when BOT_INSTANCE is unset.
-    marker = REPO_ROOT / ".bot_instance"
-    assert marker.read_text(encoding="utf-8").strip() == "foxora"
-    info = _run_describe(tmp_path, remove_instance=True)
-    assert info["instance"] == "foxora"
-    assert info["data_dir"] == str((tmp_path / ".foxora").resolve())
+def test_termux_environment_still_uses_dot_foxora2_not_b2_or_foxora_dir(tmp_path):
+    info = _probe_paths(
+        {"PREFIX": "/data/data/com.termux/files/usr", "BOT_INSTANCE": "foxora2"},
+        tmp_path,
+    )
+    expected = (tmp_path / ".foxora2").resolve()
+    assert Path(info["data_dir"]) == expected
+    assert "soroush-bot" not in info["data_dir"]
+    assert Path(info["data_dir"]).name == ".foxora2"
 
 
-def test_instance_specific_env_override_wins(tmp_path: Path) -> None:
-    custom = tmp_path / "custom-data"
-    info = _run_describe(tmp_path, {"SOROUSH_BOT_DATA_DIR_FOXORA": str(custom)})
-    assert info["data_dir"] == str(custom.resolve())
+def test_instance_specific_env_override_wins(tmp_path):
+    custom = tmp_path / "custom-foxora2-home"
+    info = _probe_paths(
+        {
+            "BOT_INSTANCE": "foxora2",
+            "SOROUSH_BOT_DATA_DIR": str(tmp_path / "wrong-shared"),
+            "SOROUSH_BOT_DATA_DIR_FOXORA": str(tmp_path / "wrong-foxora1"),
+            "SOROUSH_BOT_DATA_DIR_FOXORA2": str(custom),
+        },
+        tmp_path,
+    )
+    assert Path(info["data_dir"]) == custom.resolve()
 
 
-def test_dangerous_public_override_cannot_point_at_b2_main(tmp_path: Path) -> None:
-    # If an operator exports SOROUSH_BOT_DATA_DIR aimed at B2's main
-    # directory, Foxora must NOT write there; it gets suffixed instead.
+def test_shared_b2_or_foxora_env_override_is_deflected(tmp_path):
     b2_default = tmp_path / ".local" / "share" / "soroush-bot"
-    info = _run_describe(tmp_path, {"SOROUSH_BOT_DATA_DIR": str(b2_default)})
-    assert info["data_dir"] != str(b2_default.resolve())
-    assert info["data_dir"].endswith("soroush-bot-foxora")
-
-
-def test_ensure_layout_creates_private_dirs(tmp_path: Path) -> None:
-    env = os.environ.copy()
-    env["HOME"] = str(tmp_path)
-    env["BOT_INSTANCE"] = "foxora"
-    env.pop("SOROUSH_BOT_DATA_DIR", None)
-    code = (
-        "from modules.runtime_paths import DATA_DIR, CONFIG_DIR, LOG_DIR, DB_DIR, ensure_layout\n"
-        "ensure_layout()\n"
-        "import os\n"
-        "for d in (DATA_DIR, CONFIG_DIR, LOG_DIR, DB_DIR):\n"
-        "    assert d.is_dir() and str(d).startswith(os.path.expanduser('~/.foxora')), d\n"
-        "print('ok')\n"
+    info = _probe_paths(
+        {
+            "BOT_INSTANCE": "foxora2",
+            "SOROUSH_BOT_DATA_DIR": str(b2_default),
+        },
+        tmp_path,
     )
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, timeout=120,
+    assert Path(info["data_dir"]) != b2_default.resolve()
+    assert Path(info["data_dir"]).name == "soroush-bot-foxora2"
+
+    foxora1_default = tmp_path / ".foxora"
+    info2 = _probe_paths(
+        {
+            "BOT_INSTANCE": "foxora2",
+            "SOROUSH_BOT_DATA_DIR": str(foxora1_default),
+        },
+        tmp_path,
     )
-    assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip().endswith("ok")
-    assert (tmp_path / ".foxora" / "logs").is_dir()
-    assert not (tmp_path / ".local" / "share").exists()
+    assert Path(info2["data_dir"]) == (tmp_path / ".foxora2").resolve()
+    assert Path(info2["data_dir"]) != foxora1_default.resolve()

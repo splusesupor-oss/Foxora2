@@ -3,10 +3,10 @@
 The source tree may live on Android shared storage (``/storage/emulated/0``),
 which is a poor place for databases, fsync-heavy state and logs.  On Termux
 we therefore keep mutable state in the app-private home directory.
-Named instances (Foxora) keep every runtime artifact under their own
-isolated home directory::
+Named instances (such as ``foxora2``) keep every runtime artifact under their
+own isolated home directory::
 
-    ~/.foxora
+    ~/.foxora2
 
 On non-Termux systems the historical project-local paths remain the default
 for backwards compatibility.  Operators can opt in everywhere with
@@ -84,7 +84,7 @@ def _instance_env_key() -> str:
 
 
 def _chosen_data_dir() -> Path:
-    # اول override اختصاصی همین instance (SOROUSH_BOT_DATA_DIR_FOXORA)
+    # اول override اختصاصی همین instance (SOROUSH_BOT_DATA_DIR_FOXORA2)
     explicit_instance = os.environ.get(_instance_env_key(), "").strip()
     if explicit_instance:
         return Path(explicit_instance).expanduser().resolve()
@@ -94,14 +94,17 @@ def _chosen_data_dir() -> Path:
         if INSTANCE_NAME != "main":
             # ⚠️ جداسازی اجباری فقط برای حالت خطرناک: اگر override عمومی
             # (مثلاً export شده در .profile) دقیقاً به مسیر پیش‌فرض
-            # instance اصلی B2 اشاره کند، Foxora نباید داخل همان دایرکتوری
-            # بنویسد؛ پسوند instance اضافه می‌شود. مسیرهای explicit دیگر
-            # (انتخاب آگاهانه اپراتور/تست) دست‌نخورده می‌مانند.
+            # instance اصلی B2 یا Foxora اشاره کند، Foxora2 نباید داخل همان
+            # دایرکتوری بنویسد. مسیرهای explicit دیگر (انتخاب آگاهانه اپراتور/تست)
+            # دست‌نخورده می‌مانند.
             b2_default = (
                 Path.home() / ".local" / "share" / "soroush-bot"
             ).resolve()
             if base == b2_default:
                 return (base.parent / f"{base.name}-{INSTANCE_NAME}").resolve()
+            foxora_default = (Path.home() / ".foxora").resolve()
+            if INSTANCE_NAME != "foxora" and base == foxora_default:
+                return (Path.home() / f".{INSTANCE_NAME}").resolve()
         return base
     if INSTANCE_NAME == "main":
         # حالت سازگاری: بدون instance اختصاصی، مسیر تاریخی پروژه (non-Termux)
@@ -109,9 +112,9 @@ def _chosen_data_dir() -> Path:
         if _is_termux():
             return (Path.home() / ".local" / "share" / "soroush-bot").resolve()
         return PROJECT_ROOT
-    # Foxora: هر instance غیراصلی در یک مسیر مستقل نقطه‌دار در home زندگی
-    # می‌کند. instance «foxora» بنابراین دقیقاً در ~/.foxora قرار می‌گیرد و
-    # هیچ‌وقت داخل مسیرهای B2 (~/.local/share/soroush-bot*) نمی‌نویسد.
+    # Foxora2: هر instance غیراصلی در یک مسیر مستقل نقطه‌دار در home زندگی
+    # می‌کند. instance «foxora2» بنابراین دقیقاً در ~/.foxora2 قرار می‌گیرد و
+    # هیچ‌وقت داخل مسیرهای Foxora (~/.foxora) یا B2 (~/.local/share/soroush-bot*) نمی‌نویسد.
     return (Path.home() / f".{INSTANCE_NAME}").resolve()
 
 

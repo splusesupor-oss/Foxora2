@@ -386,18 +386,29 @@ async def deliver_with_fresh_client(
     load_dotenv(PROJECT_ROOT / ".env")
     config = _deployment_config()
     # نشست هر instance مستقل است: اول متغیر اختصاصی همین instance (برای
-    # Foxora: SOROUSH_SESSION_STRING_FOXORA) تا گزارش‌ها هرگز با نشست ربات
-    # دیگری (B2) ارسال نشوند.
+    # Foxora2: SOROUSH_SESSION_STRING_FOXORA2) تا گزارش‌ها هرگز با نشست ربات
+    # دیگری (Foxora یا B2) ارسال نشوند.
+    instance_key = INSTANCE_NAME.upper()
     session_string = (
-        os.environ.get(f"SOROUSH_SESSION_STRING_{INSTANCE_NAME.upper()}")
+        os.environ.get(f"SOROUSH_SESSION_STRING_{instance_key}")
         or os.environ.get("SOROUSH_SESSION_STRING")
         or config.get("session_string")
         or ""
     )
     if not session_string:
-        raise WatchdogDeliveryError("SOROUSH_SESSION_STRING is not configured")
-    api_id = os.environ.get("API_ID") or config.get("api_id")
-    api_hash = os.environ.get("API_HASH") or config.get("api_hash")
+        raise WatchdogDeliveryError(
+            f"SOROUSH_SESSION_STRING_{instance_key} is not configured"
+        )
+    api_id = (
+        os.environ.get(f"API_ID_{instance_key}")
+        or os.environ.get("API_ID")
+        or config.get("api_id")
+    )
+    api_hash = (
+        os.environ.get(f"API_HASH_{instance_key}")
+        or os.environ.get("API_HASH")
+        or config.get("api_hash")
+    )
     session = StringSession(session_string)
     client = (
         SoroushClient(session, api_id, api_hash)

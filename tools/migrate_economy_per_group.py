@@ -30,7 +30,7 @@ if str(ROOT) not in sys.path:
 from economy import storage
 from economy.coins import accounts
 
-LEGACY_COINS = ROOT / "config" / "coins.json"
+LEGACY_COINS = storage.LEGACY_COINS_FILE
 COIN_KEYS = ("bronze", "silver", "gold")
 
 

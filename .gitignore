@@ -1,32 +1,87 @@
-# Python runtime artifacts
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*$py.class
-.pytest_cache/
-.mypy_cache/
-
-# Runtime logs and client sessions
-logs/
-*.session
-*.session-*
-*.log
-
-# فایل env واقعی — هرگز commit نشود
+# تنظیمات محرمانه و نشست‌ها
 .env
 .env.*
 !.env.example
+*.session
+*.session-journal
 
-# Runtime state — متعلق به ~/.foxora روی هر دستگاه است، نه مخزن.
-# deployment configها (config.json/owner.json/whitelist.txt/banned_words.txt)
-# عمداً در مخزن می‌مانند چون کد آن‌ها را از ریشهٔ پروژه می‌خواند.
-config/*.json
-!config/config.json
-!config/owner.json
+# لاگ‌ها و خروجی‌های زمان اجرا (در مسیر پروژه؛ مسیر اصلی Foxora2 در ~/.foxora2 است)
+logs/*.log
+logs/deleted_messages.json
+logs/spam_counts.json
+logs/group_stats.json
+logs/user_map.json
+logs/search_cooldown.json
+logs/bot_runtime.log*
+logs/watchdog.log*
 
-# runtime files
-backups/runtime/
-config/tmp*.tmp
+# داده‌های متغیر ربات در صورت اجرای قدیمی داخل مخزن
+config/bot.pid
+config/watchdog.lock
+config/watchdog_pending.json
+config/groups.json
+config/admins.json
+config/banned_users.json
+config/economy.json
+config/coins.json
+config/economy_settings.json
+config/economy_shop.json
+config/user_activity.json
+config/user_originals.json
+config/vip_users.json
+config/manual_mutes.json
+config/group_rules.json
+config/group_words.json
+config/group_banned_words.json
+config/group_expiry.json
+config/group_memory.json
+config/group_level.json
+config/group_message_lock_state.json
+config/bot_disabled_groups.json
+config/entertainment_mode.json
+config/punishment_mode.json
+config/warning_threshold.json
+config/admin_log.json
+config/auto_cleanup.json
+config/user_history.json
+config/riddle_progress.json
+config/flag_guess_progress.json
+config/sentence_guess_state.json
+config/fox_minesweeper.json
+config/fox_lucky_box.json
+config/fox_game_tokens.json
+config/fox_game_leaderboard.json
+config/fox_official_tokens.json
+config/reminders.json
+config/pinned_messages.json
+config/clipboard.json
+config/broadcast_state.json
+config/daily_admin_report_state.json
+config/name_family_learning.json
+config/owner_peer.json
+config/search_access.json
+config/notice_cleanup.json
+config/archive/
+backups/
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 
-# .bot_instance برای Foxora عمداً commit می‌شود: identity همین مخزن است.
+# پایتون
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+.pytest_cache/
+
+# سیستم‌عامل و ویرایشگر
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo

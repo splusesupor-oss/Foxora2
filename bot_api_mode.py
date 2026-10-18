@@ -21,9 +21,47 @@ from dotenv import load_dotenv
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
+
+def _default_instance():
+    marker = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".bot_instance")
+    try:
+        with open(marker, "r", encoding="utf-8") as fh:
+            name = fh.read().strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    return "foxora2"
+
+
+os.environ.setdefault("BOT_INSTANCE", _default_instance())
+load_dotenv(override=False)
+
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker
 
-load_dotenv()
+
+def resolve_bot_token(env_get=None, config_get=None, instance=None):
+    """سلسله‌مراتب قطعی توکن ربات رسمی: اختصاصی instance → عمومی → config."""
+    if env_get is None:
+        env_get = os.getenv
+    if not instance:
+        instance = (os.getenv("BOT_INSTANCE") or _default_instance()).strip() or "foxora2"
+    suffix = instance.upper()
+    for key in (
+        f"BOT_TOKEN_{suffix}",
+        f"SOROUSH_BOT_TOKEN_{suffix}",
+        "BOT_TOKEN",
+        "SOROUSH_BOT_TOKEN",
+    ):
+        value = env_get(key)
+        if value:
+            return value
+    if config_get is not None:
+        try:
+            return config_get("bot_token", "") or ""
+        except Exception:
+            return ""
+    return ""
 
 class SoroushOfficialBot:
     def __init__(self, token: str, config_path="config/config.json"):
@@ -198,7 +236,7 @@ class SoroushOfficialBot:
 
 
 if __name__ == "__main__":
-    token = os.getenv("BOT_TOKEN") or os.getenv("SOROUSH_BOT_TOKEN")
+    token = resolve_bot_token()
     if not token:
         # از config بخوان
         try:
@@ -210,7 +248,7 @@ if __name__ == "__main__":
 
     if not token:
         print("❌ توکن ربات یافت نشد!")
-        print("لطفا توکن را در فایل .env به نام BOT_TOKEN یا در config/config.json قرار دهید")
+        print("لطفا توکن را در فایل .env به نام BOT_TOKEN_FOXORA2 (یا BOT_TOKEN) یا در config/config.json قرار دهید")
         print("برای ساخت ربات به @MrBot در سروش پلاس مراجعه کنید")
         exit(1)
 

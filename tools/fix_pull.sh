@@ -70,6 +70,6 @@ for f in handlers/economy_handler.py economy/__init__.py \
 done
 
 echo
-echo "▶️  گام بعدی: ربات را دوباره اجرا کنید"
-echo "     pkill -f 'python3 main.py'"
-echo "     python3 main.py"
+echo "▶️  گام بعدی: ربات Foxora2 را دوباره اجرا کنید"
+echo "     ./foxora2 stop"
+echo "     ./foxora2"

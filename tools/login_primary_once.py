@@ -5,10 +5,10 @@ Run only while the bot is stopped.  It makes exactly one connect/code/sign-in
 attempt and exits on any network failure.
 
 نشست جدید **فقط** داخل متغیر اختصاصی همین instance ذخیره می‌شود
-(``SOROUSH_SESSION_STRING_<INSTANCE>`` — برای Foxora یعنی
-``SOROUSH_SESSION_STRING_FOXORA``) و به متغیر عمومی
-``SOROUSH_SESSION_STRING`` — که ممکن است متعلق به ربات دیگری (B2) باشد —
-هیچ‌وقت دست نمی‌زند.
+(``SOROUSH_SESSION_STRING_<INSTANCE>`` — برای Foxora2 یعنی
+``SOROUSH_SESSION_STRING_FOXORA2``) و به متغیرهای
+``SOROUSH_SESSION_STRING_FOXORA`` یا ``SOROUSH_SESSION_STRING`` — که ممکن است
+متعلق به ربات‌های دیگر (Foxora یا B2) باشند — هیچ‌وقت دست نمی‌زند.
 """
 from __future__ import annotations
 import asyncio
@@ -25,8 +25,8 @@ def session_env_key() -> str:
     """نام متغیر نشستِ اختصاصی همین instance.
 
     منبع حقیقت: ``BOT_INSTANCE`` اگر ست شده باشد، در غیر این صورت فایل
-    نشانگر ``.bot_instance`` کنار ریشهٔ پروژه؛ در این مخزن هر دو «foxora»
-    هستند پس خروجی «SOROUSH_SESSION_STRING_FOXORA» است.  حتی در نبود هر دو،
+    نشانگر ``.bot_instance`` کنار ریشهٔ پروژه؛ در این مخزن هر دو «foxora2»
+    هستند پس خروجی «SOROUSH_SESSION_STRING_FOXORA2» است.  حتی در نبود هر دو،
     متغیر عمومی هدف نمی‌شود.
     """
     instance = (os.environ.get("BOT_INSTANCE") or "").strip()
@@ -36,7 +36,7 @@ def session_env_key() -> str:
         except OSError:
             instance = ""
     if not instance:
-        instance = "foxora"  # هویت این مخزن؛ هرگز به متغیر عمومی برنمی‌گردد
+        instance = "foxora2"  # هویت این مخزن؛ هرگز به متغیر عمومی برنمی‌گردد
     return f"SOROUSH_SESSION_STRING_{instance.upper()}"
 
 
@@ -54,8 +54,9 @@ def save_primary(value: str, *, key: str | None = None, env_file: Path | None = 
     """نشست را فقط در متغیر اختصاصی instance می‌نویسد.
 
     خط ``SOROUSH_SESSION_STRING=`` (عمومی، احتمالاً متعلق به B2) و هر متغیر
-    اختصاصی دیگر دقیقاً همان‌طور که هست باقی می‌ماند.  تمام داده‌ها فقط در
-    ``.env`` همین مخزن (کنار ریشهٔ Foxora) نوشته می‌شود.
+    اختصاصی دیگر (مثل ``SOROUSH_SESSION_STRING_FOXORA=``) دقیقاً همان‌طور که هست
+    باقی می‌ماند.  تمام داده‌ها فقط در ``.env`` همین مخزن (کنار ریشهٔ Foxora2)
+    نوشته می‌شود.
     """
     key = key or session_env_key()
     target = env_file or ENV_FILE
@@ -92,7 +93,9 @@ async def main():
         from splusthon.sessions import StringSession
     except ImportError as error:
         raise SystemExit("با python3 همان محیط Termux اجرا کنید.") from error
-    api_id, api_hash = os.getenv("API_ID"), os.getenv("API_HASH")
+    instance_key = (os.environ.get("BOT_INSTANCE") or "foxora2").strip().upper() or "FOXORA2"
+    api_id = os.getenv(f"API_ID_{instance_key}") or os.getenv("API_ID")
+    api_hash = os.getenv(f"API_HASH_{instance_key}") or os.getenv("API_HASH")
     client = SoroushClient(StringSession(), int(api_id), api_hash) if api_id and api_hash else SoroushClient(StringSession())
     try:
         print("اتصال یک‌باره به سروش؛ در صورت خطا برنامه متوقف می‌شود.")
