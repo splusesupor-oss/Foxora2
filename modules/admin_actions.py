@@ -56,6 +56,12 @@ def public_warning_reason_line(reason):
         return f"دلیل کلمه ممنوعه : ({banned_match.group(1)})"
     if group_filter_match:
         return f"دلیل فیلتر گروه : ({group_filter_match.group(1)})"
+    # 🖇 لینک در بیوگرافی: علت باید برای کاربر روشن و کوتاه باشد.
+    bio_match = re.search(r"لینک در بیوگرافی(?:\s*\((.*?)\))?", raw)
+    if bio_match:
+        kind = (bio_match.group(1) or "").strip()
+        suffix = f" ({kind})" if kind else ""
+        return f"دلیل: لینک در بیوگرافی حساب کاربر{suffix}"
     return f"دلیل فیلتر گروه : {raw}"
 
 
