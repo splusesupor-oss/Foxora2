@@ -110,6 +110,11 @@ def auto_scan_members() -> bool:
     return _env_int("BIO_LINK_AUTO_SCAN_MEMBERS", 0, 0, 1) == 1
 
 
+def skip_native_admins() -> bool:
+    """ادمین/مالکِ خودِ گروه (نقش سروش) معاف باشد؟ (پیش‌فرض: بله)"""
+    return _env_int("BIO_LINK_SKIP_NATIVE_ADMINS", 1, 0, 1) == 1
+
+
 def start_delay() -> float:
     return _env_float("BIO_LINK_START_DELAY", 120.0, 0.0, 3600.0)
 
@@ -235,6 +240,85 @@ async def fetch_about(bot, user) -> Tuple[str, Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# معافیت‌ها: مالک ربات، مالک گروه، ادمین ثبت‌شده، ادمین واقعی گروه، VIP
+# ---------------------------------------------------------------------------
+
+ADMIN_ROLE_NAMES = ("creator", "admin", "owner")
+
+
+def local_exemption(chat_id, user_id, username=None) -> Optional[str]:
+    """معافیت‌های ارزان و محلی (بدون RPC): مالک/ادمین ثبت‌شده/VIP/مالک ربات."""
+    try:
+        from modules.admin_tools import has_admin_permission
+        if has_admin_permission(chat_id, user_id, username):
+            return "admin"
+    except Exception:
+        pass
+    try:
+        from modules import vip_storage
+        if vip_storage.is_vip(chat_id, user_id):
+            return "vip"
+    except Exception:
+        pass
+    return None
+
+
+def _participant_role_name(participant) -> Optional[str]:
+    name = type(participant).__name__.lower()
+    for role in ADMIN_ROLE_NAMES:
+        if role in name:
+            return role
+    return None
+
+
+async def fetch_native_role(bot, chat_id, user) -> Optional[str]:
+    """نقش واقعی کاربر در گروه سروش را می‌خواند؛ ``None`` یعنی عضو عادی/نامعلوم.
+
+    فقط یک‌بار در هر TTL برای هر کاربر صدا زده می‌شود (نه در مسیر هر پیام).
+    """
+    client = getattr(bot, "client", None)
+    if client is None or not skip_native_admins():
+        return None
+    # سریع‌ترین راه: نقش همراه رویداد آمده باشد.
+    role = _participant_role_name(getattr(user, "participant", None))
+    if role:
+        return role
+    try:
+        from splusthon.tl.functions.channels import GetParticipantRequest
+        from splusthon import utils as splus_utils
+    except Exception:  # pragma: no cover
+        return None
+    try:
+        channel = None
+        try:
+            channel = getattr(bot, "reply_input_peer_cache", {}).get(chat_id)
+        except Exception:
+            channel = None
+        if channel is None:
+            channel = await asyncio.wait_for(
+                client.get_input_entity(chat_id), timeout=fetch_timeout()
+            )
+        participant_input = await asyncio.wait_for(
+            client.get_input_entity(user), timeout=fetch_timeout()
+        )
+        result = await asyncio.wait_for(
+            client(
+                GetParticipantRequest(
+                    channel=channel, participant=participant_input
+                )
+            ),
+            timeout=fetch_timeout(),
+        )
+        return _participant_role_name(getattr(result, "participant", None))
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # نبود دسترسی/خطا یعنی «نامعلوم»؛ در این حالت کاربر عادی فرض می‌شود
+        # اما هرگز به‌خاطر ندانستن نقش، اخطار اضافه نمی‌گیرد.
+        return None
+
+
+# ---------------------------------------------------------------------------
 # مسیر گرم: خواندن سریع و بدون RPC
 # ---------------------------------------------------------------------------
 
@@ -247,6 +331,8 @@ def link_state(chat_id, user_id) -> Tuple[bool, Optional[str]]:
     except Exception:
         return False, None
     if not isinstance(record, dict):
+        return False, None
+    if record.get("exempt"):
         return False, None
     if record.get("link"):
         return True, record.get("label")
@@ -280,6 +366,16 @@ async def check_user(bot, chat_id, user, *, force: bool = False) -> Optional[dic
         return bio_link_storage.get_user(chat_id, user_id)
 
     display_name = _display_name(user)
+
+    # معافیت محلی (مالک/ادمین ثبت‌شده/VIP) — بدون هیچ RPC.
+    exempt = local_exemption(chat_id, user_id, getattr(user, "username", None))
+    if exempt:
+        bio_link_storage.set_user(
+            chat_id, user_id, link=False, label=None, status=STATUS_OK,
+            bio_len=0, name=display_name, exempt=exempt,
+        )
+        return bio_link_storage.get_user(chat_id, user_id)
+
     status, about = await fetch_about(bot, user)
     label = None
     if status == STATUS_OK:
@@ -301,6 +397,22 @@ async def check_user(bot, chat_id, user, *, force: bool = False) -> Optional[dic
             )
         _log(bot, f"CHECK user_id={user_id} chat_id={chat_id} status={status}")
         return bio_link_storage.get_user(chat_id, user_id)
+
+    # ادمین/مالک واقعی گروه: همان لحظه شناسایی و برای همیشه (تا انقضای TTL)
+    # معاف ثبت می‌شود تا نه اخطار بگیرد و نه پیامی از او حذف شود.
+    if has:
+        role = await fetch_native_role(bot, chat_id, user)
+        if role:
+            bio_link_storage.set_user(
+                chat_id, user_id, link=True, label=label, status=STATUS_OK,
+                bio_len=len(about or ""), name=display_name, exempt=role,
+            )
+            _log(
+                bot,
+                f"CHECK user_id={user_id} chat_id={chat_id} link=True "
+                f"exempt={role}",
+            )
+            return bio_link_storage.get_user(chat_id, user_id)
 
     record = bio_link_storage.set_user(
         chat_id, user_id,
@@ -557,10 +669,17 @@ async def scan_group(bot, chat_id, *, limit: Optional[int] = None,
                         bio_link.analyze(about, detect_username=detect_username)
                         if status == STATUS_OK else (False, None)
                     )
+                    exempt = local_exemption(
+                        chat_id, user_id, getattr(user, "username", None)
+                    )
+                    if not exempt and has:
+                        exempt = _participant_role_name(
+                            getattr(user, "participant", None)
+                        )
                     bio_link_storage.set_user(
                         chat_id, user_id, link=has, label=label,
                         status=STATUS_OK, bio_len=len(about or ""),
-                        name=display_name,
+                        name=display_name, exempt=exempt,
                     )
                     summary["checked"] += 1
                     if has:

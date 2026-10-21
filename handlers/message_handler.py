@@ -3838,6 +3838,10 @@ async def handle_new_message(bot, event):
                         f"بررسی‌شده: {info['checked']}",
                         f"دارای لینک: {info['with_link']}",
                     ]
+                    if info.get("exempt"):
+                        lines.append(
+                            f"معاف (ادمین/مالک/VIP): {_math_digits(info['exempt'])}"
+                        )
                     if info["errors"]:
                         lines.append(f"بدون دسترسی/خطا: {info['errors']}")
                     last = info.get("scan") or {}
@@ -8751,7 +8755,8 @@ async def handle_new_message(bot, event):
         bio_link_hit = False
         bio_link_reason = None
         if (not event.is_private
-                and not (is_group_moderator or fast_command or _vip_exempt)
+                and not (is_group_moderator or fast_command or _vip_exempt
+                         or native_admin_warn_only)
                 and user_id):
             try:
                 if bio_link_storage.is_enabled(chat_id):

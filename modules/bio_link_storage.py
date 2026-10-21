@@ -212,7 +212,8 @@ def get_user(chat_id, user_id) -> Optional[dict]:
 
 def set_user(chat_id, user_id, *, link: bool, label=None, status: str = "ok",
              bio_len: int = 0, checked_at: Optional[float] = None,
-             name: Optional[str] = None) -> dict:
+             name: Optional[str] = None,
+             exempt: Optional[str] = None) -> dict:
     """ثبت/به‌روزرسانی وضعیت یک کاربر.
 
     ``name`` فقط برای نمایش در «لیست لینک بیو» است (نام عمومی گروه) و متن
@@ -229,6 +230,10 @@ def set_user(chat_id, user_id, *, link: bool, label=None, status: str = "ok",
     }
     if name:
         entry["name"] = str(name)[:80]
+    if exempt:
+        # دلیل معافیت (ادمینِ گروه/مالک/ادمین ثبت‌شده/VIP) — برای این کاربر
+        # هیچ اخطار یا حذفی اعمال نمی‌شود.
+        entry["exempt"] = str(exempt)[:32]
     users[str(user_id)] = entry
     _prune(users)
     _touch()
@@ -279,7 +284,7 @@ def flagged_users(chat_id):
     rows = [
         (key, value)
         for key, value in record["users"].items()
-        if isinstance(value, dict) and value.get("link")
+        if isinstance(value, dict) and value.get("link") and not value.get("exempt")
     ]
     rows.sort(key=lambda item: float((item[1] or {}).get("checked_at") or 0), reverse=True)
     return rows
@@ -291,7 +296,12 @@ def stats(chat_id) -> dict:
     users = record["users"] if record else {}
     total = len(users)
     with_link = sum(
-        1 for value in users.values() if isinstance(value, dict) and value.get("link")
+        1 for value in users.values()
+        if isinstance(value, dict) and value.get("link") and not value.get("exempt")
+    )
+    exempt = sum(
+        1 for value in users.values()
+        if isinstance(value, dict) and value.get("exempt")
     )
     errors = sum(
         1 for value in users.values()
@@ -307,6 +317,7 @@ def stats(chat_id) -> dict:
         "enabled_source": enabled_source,
         "checked": total,
         "with_link": with_link,
+        "exempt": exempt,
         "errors": errors,
         "scan": dict(record.get("scan") or {}) if record else {},
         "ttl_seconds": ttl_seconds(),

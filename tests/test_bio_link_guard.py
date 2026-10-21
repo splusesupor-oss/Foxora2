@@ -295,12 +295,13 @@ def test_check_user_persists_and_marks_link(tmp_path, monkeypatch):
     assert record["link"] is True
     assert record["label"] == "لینک تلگرام"
     assert record["name"] == "@ad_user"
-    assert client.calls == 1
+    # یک RPC برای بیو + یک RPC برای نقش گروه (معافیت ادمین)، هر دو یک‌بار در TTL
+    assert client.calls == 2
     assert bio_link_service.link_state(chat_id, 801) == (True, "لینک تلگرام")
 
     # دومین بررسی داخل TTL هیچ RPC جدیدی نمی‌زند.
     asyncio.run(bio_link_service.check_user(bot, chat_id, SimpleNamespace(id=801)))
-    assert client.calls == 1
+    assert client.calls == 2  # داخل TTL هیچ RPC جدیدی اضافه نشد
 
 
 def test_check_user_api_error_never_marks_link(tmp_path, monkeypatch):
@@ -928,8 +929,8 @@ def test_first_message_triggers_live_bio_check_and_both_are_moderated(tmp_path, 
         ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=2101)
         await handle_new_message(bot, ev)
         await asyncio.sleep(0.1)
-        # بیو همان لحظه خوانده و ذخیره شد
-        assert client.calls == 1
+        # بیو همان لحظه خوانده و ذخیره شد (بیو + بررسی نقش گروه)
+        assert client.calls == 2
         record = bio_link_storage.get_user(chat_id, user.id)
         assert record["link"] is True
         assert record["label"] == "لینک تلگرام"
@@ -942,7 +943,7 @@ def test_first_message_triggers_live_bio_check_and_both_are_moderated(tmp_path, 
         ev2 = FakeEvent(chat_id, user, "پیام دوم من", msg_id=2102)
         await handle_new_message(bot, ev2)
         await asyncio.sleep(0.05)
-        assert client.calls == 1
+        assert client.calls == 2
         assert actions.warnings[-1]["count"] == 2
 
     asyncio.run(_scenario())
@@ -961,7 +962,7 @@ def test_first_message_with_clean_bio_is_not_punished(tmp_path, monkeypatch):
         ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=2201)
         await handle_new_message(bot, ev)
         await asyncio.sleep(0.1)
-        assert client.calls == 1
+        assert client.calls == 1  # فقط بیو؛ چون لینکی نبود نقش هم پرسیده نشد
         assert bio_link_storage.get_user(chat_id, user.id)["link"] is False
         assert actions.warnings == []
         assert deleted == []
@@ -1058,3 +1059,119 @@ def test_watcher_skips_scanning_when_policy_is_messages_only(tmp_path, monkeypat
     asyncio.run(_scenario())
     assert client.participant_calls == 0
     assert bio_link_storage.get_user(chat_id, 2501) is None
+
+
+# ---------------------------------------------------------------------------
+# ۷) معافیت ادمین‌های گروه/مالک/ثبت‌شده/VIP + قالب پیام
+# ---------------------------------------------------------------------------
+
+class RoleClient(FakeClient):
+    """کلاینت جعلی که نقش گروه را هم برمی‌گرداند."""
+
+    def __init__(self, about, role="ChannelParticipantAdmin"):
+        super().__init__(about=about)
+        self.role = role
+
+    def __call__(self, request):
+        self.calls += 1
+        name = type(request).__name__
+
+        async def _result():
+            if name == "GetParticipantRequest":
+                participant = (
+                    None if self.role is None
+                    else type(self.role, (), {})()
+                )
+                return SimpleNamespace(participant=participant)
+            return SimpleNamespace(
+                full_user=SimpleNamespace(about=self.about), users=[], chats=[]
+            )
+
+        return _result()
+
+
+def test_native_group_admin_with_link_bio_is_exempt(tmp_path, monkeypatch):
+    chat_id = -10099501
+    _setup_group(tmp_path, monkeypatch, chat_id)
+    _enable_live_checks(monkeypatch)
+    client = RoleClient(about="t.me/ad_channel", role="ChannelParticipantAdmin")
+    bot, deleted, tracker, actions = _make_bot(tmp_path, monkeypatch)
+    bot.client = client
+    user = SimpleNamespace(id=3101, first_name="ادمین", username="admin_3101")
+
+    async def _scenario():
+        ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=3101)
+        await handle_new_message(bot, ev)
+        await asyncio.sleep(0.1)
+        record = bio_link_storage.get_user(chat_id, user.id)
+        assert record["exempt"] == "admin"
+        assert actions.warnings == []
+        assert deleted == []
+        # لیست متخلفان هم او را نشان نمی‌دهد
+        assert bio_link_storage.flagged_users(chat_id) == []
+
+    asyncio.run(_scenario())
+
+
+def test_group_creator_with_link_bio_is_exempt(tmp_path, monkeypatch):
+    chat_id = -10099502
+    _setup_group(tmp_path, monkeypatch, chat_id)
+    _enable_live_checks(monkeypatch)
+    client = RoleClient(about="https://shop.example.com", role="ChannelParticipantCreator")
+    bot, deleted, tracker, actions = _make_bot(tmp_path, monkeypatch)
+    bot.client = client
+    user = SimpleNamespace(id=3201, first_name="سازنده", username="creator_3201")
+
+    async def _scenario():
+        ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=3201)
+        await handle_new_message(bot, ev)
+        await asyncio.sleep(0.1)
+        assert bio_link_storage.get_user(chat_id, user.id)["exempt"] == "creator"
+        assert actions.warnings == []
+        assert deleted == []
+
+    asyncio.run(_scenario())
+
+
+def test_warning_template_matches_required_format(tmp_path, monkeypatch):
+    """قالب اخطار: کاربر / خط خالی / دلیل / خط خالی / تعداد اخطار."""
+    from modules.admin_actions import AdminActions
+    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+
+    sent = {}
+
+    class Client:
+        _outgoing_sender = None
+
+        async def send_message(self, chat_id, text, **kwargs):
+            sent["chat_id"] = chat_id
+            sent["text"] = text
+            sent["entities"] = kwargs.get("formatting_entities")
+            return SimpleNamespace(id=1)
+
+    actions = AdminActions(
+        client=Client(),
+        logger=SimpleNamespace(log_info=lambda *a, **k: None,
+                               log_error=lambda *a, **k: None),
+        config_manager=SimpleNamespace(get=lambda k, d=None: d),
+    )
+    user = SimpleNamespace(id=4101, first_name="", last_name="", username="Sjskajk")
+
+    async def _run():
+        await actions.send_warning(
+            chat_id=-1001, username="Sjskajk", user=user,
+            reason="لینک در بیوگرافی (دامنه)", count=1, threshold=5,
+        )
+
+    asyncio.run(_run())
+    assert sent["text"] == (
+        "⚠️ کاربر @Sjskajk\n"
+        "\n"
+        "پیام شما حذف شد | دلیل: لینک در بیوگرافی\n"
+        "\n"
+        "\n"
+        "تعداد اخطار: 𝟭/𝟱"
+    )
+    entities = sent["entities"]
+    assert any(isinstance(e, MessageEntityBlockquote) for e in entities)
+    assert any(isinstance(e, MessageEntityBold) for e in entities)
