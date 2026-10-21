@@ -3832,6 +3832,9 @@ async def handle_new_message(bot, event):
                         "🖇 وضعیت فیلتر لینک بیو",
                         f"وضعیت: {'روشن ✅' if info['enabled'] else 'خاموش ⛔️'}",
                         f"شناسایی آیدی تنها: {'روشن' if info['detect_username'] else 'خاموش'}",
+                        f"حالت: بررسی همان لحظهٔ پیام"
+                        if not bio_link_service.auto_scan_members()
+                        else f"حالت: اسکن دوره‌ای اعضا",
                         f"بررسی‌شده: {info['checked']}",
                         f"دارای لینک: {info['with_link']}",
                     ]
@@ -8740,9 +8743,11 @@ async def handle_new_message(bot, event):
             except Exception:
                 _vip_exempt = False
         # --- 🖇 فیلتر لینک بیوگرافی -------------------------------------------------
-        # فقط خواندن از حافظه/دیسک؛ هیچ RPC در مسیر گرم انجام نمی‌شود. اگر
-        # وضعیت این کاربر ناموجود/کهنه باشد، بررسی بیو در پس‌زمینه صف می‌شود
-        # و همین پیام طبق وضعیت شناخته‌شده (یا بدون تخلف) پردازش می‌گردد.
+        # هر کاربری که در گروه پیام می‌دهد، بیوگرافی‌اش دیده می‌شود. برای هر
+        # کاربر فقط یک‌بار (تا انقضای TTL) این بررسی انجام می‌شود و نتیجه ذخیره
+        # می‌گردد؛ پس از آن فقط از حافظه/دیسک خوانده می‌شود و هیچ RPC اضافه‌ای
+        # در پیام‌های بعدی وجود ندارد. اگر سرویس کند/خطا بدهد، بررسی به
+        # پس‌زمینه می‌رود و همان پیام بدون تخلف پردازش می‌شود.
         bio_link_hit = False
         bio_link_reason = None
         if (not event.is_private
@@ -8750,7 +8755,12 @@ async def handle_new_message(bot, event):
                 and user_id):
             try:
                 if bio_link_storage.is_enabled(chat_id):
-                    bio_link_service.schedule_check(bot, chat_id, sender)
+                    if bio_link_service.await_first_check():
+                        await bio_link_service.ensure_user_now(
+                            bot, chat_id, sender
+                        )
+                    else:
+                        bio_link_service.schedule_check(bot, chat_id, sender)
                     bio_link_hit, _bio_label = bio_link_service.link_state(
                         chat_id, user_id
                     )

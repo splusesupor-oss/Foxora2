@@ -91,6 +91,25 @@ def check_on_join() -> bool:
     return _env_int("BIO_LINK_CHECK_ON_JOIN", 1, 0, 1) == 1
 
 
+def await_first_check() -> bool:
+    """آیا اولین پیام هر کاربر منتظر نتیجهٔ بررسی بیو بماند؟ (پیش‌فرض: بله)"""
+    return _env_int("BIO_LINK_AWAIT_FIRST_CHECK", 1, 0, 1) == 1
+
+
+def await_timeout() -> float:
+    """سقف انتظار برای بررسی بیو هنگام اولین پیام (ثانیه)."""
+    return _env_float("BIO_LINK_AWAIT_TIMEOUT", 8.0, 1.0, 30.0)
+
+
+def auto_scan_members() -> bool:
+    """اسکن دوره‌ای «همهٔ اعضا» — پیش‌فرض خاموش.
+
+    سیاست پیش‌فرض: فقط کاربرانی که در گروه پیام می‌دهند بررسی می‌شوند.
+    اسکن کامل اعضا فقط با دستور «بررسی بیو» یا با روشن کردن این گزینه.
+    """
+    return _env_int("BIO_LINK_AUTO_SCAN_MEMBERS", 0, 0, 1) == 1
+
+
 def start_delay() -> float:
     return _env_float("BIO_LINK_START_DELAY", 120.0, 0.0, 3600.0)
 
@@ -298,6 +317,53 @@ async def check_user(bot, chat_id, user, *, force: bool = False) -> Optional[dic
         f"link={bool(has)} label={label!r} bio_len={len(about or '')}",
     )
     return record
+
+
+async def ensure_user_now(bot, chat_id, user) -> Optional[dict]:
+    """بیوی کاربر را همین حالا (در حد یک RPC) می‌خواند تا اولین پیام هم بررسی شود.
+
+    اگر وضعیت تازه باشد، هیچ RPC انجام نمی‌شود. اگر سرویس کند/خطا بدهد،
+    بررسی به پس‌زمینه منتقل می‌شود و پیام فعلی بدون تخلف پردازش می‌گردد.
+    """
+    if not check_on_message():
+        return None
+    user_id = _safe_int(getattr(user, "id", 0))
+    if not user_id or user_id == _safe_int(getattr(bot, "bot_account_id", 0)):
+        return None
+    try:
+        if not bio_link_storage.is_enabled(chat_id):
+            return None
+    except Exception:
+        return None
+    key = (str(chat_id), str(user_id))
+    if time.time() < _retry_after.get(key, 0.0):
+        return bio_link_storage.get_user(chat_id, user_id)
+    if not needs_check(chat_id, user_id):
+        return bio_link_storage.get_user(chat_id, user_id)
+    if key in _inflight:
+        return bio_link_storage.get_user(chat_id, user_id)
+    _inflight.add(key)
+    try:
+        async with _loop_semaphore():
+            return await asyncio.wait_for(
+                check_user(bot, chat_id, user), timeout=await_timeout()
+            )
+    except asyncio.TimeoutError:
+        _log(bot, f"CHECK TIMEOUT user_id={user_id} chat_id={chat_id}")
+        schedule_check(bot, chat_id, user)
+        return bio_link_storage.get_user(chat_id, user_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        _log(
+            bot,
+            f"CHECK FAILED user_id={user_id} chat_id={chat_id} "
+            f"error={type(error).__name__}",
+            error=True,
+        )
+        return bio_link_storage.get_user(chat_id, user_id)
+    finally:
+        _inflight.discard(key)
 
 
 def schedule_check(bot, chat_id, user):
@@ -562,6 +628,11 @@ async def watcher(bot, logger=None):
         await asyncio.sleep(initial)
     while True:
         try:
+            if not auto_scan_members():
+                # سیاست پیش‌فرض: «فقط کسانی که پیام می‌دهند». اسکن کامل اعضا
+                # فقط با دستور «بررسی بیو» یا BIO_LINK_AUTO_SCAN_MEMBERS=1.
+                await asyncio.sleep(scan_interval())
+                continue
             groups = active_groups()
             for chat_id in groups:
                 try:

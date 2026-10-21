@@ -900,3 +900,161 @@ def test_fetch_about_parses_real_splusthon_types(tmp_path, monkeypatch):
     assert status == bio_link_service.STATUS_OK
     assert about == "کانال ما: t.me/real_channel"
     assert bio_link.find_link(about) == "لینک تلگرام"
+
+
+# ---------------------------------------------------------------------------
+# ۶) سیاست «فقط کسانی که پیام می‌دهند»
+# ---------------------------------------------------------------------------
+
+def _enable_live_checks(monkeypatch):
+    monkeypatch.setenv("BIO_LINK_CHECK_ON_MESSAGE", "1")
+    monkeypatch.setenv("BIO_LINK_AWAIT_FIRST_CHECK", "1")
+    monkeypatch.setenv("BIO_LINK_AWAIT_TIMEOUT", "5")
+    bio_link_service.reset_runtime_state()
+
+
+def test_first_message_triggers_live_bio_check_and_both_are_moderated(tmp_path, monkeypatch):
+    """کاربری که اولین پیامش را می‌فرستد، همان لحظه بررسی می‌شود."""
+    chat_id = -10099401
+    _setup_group(tmp_path, monkeypatch, chat_id)
+    _enable_live_checks(monkeypatch)
+    client = FakeClient(about="کانال من: t.me/ad_channel")
+    bot, deleted, tracker, actions = _make_bot(tmp_path, monkeypatch)
+    bot.client = client
+    user = SimpleNamespace(id=2101, first_name="تازه", username="new_2101")
+
+    async def _scenario():
+        assert bio_link_storage.get_user(chat_id, user.id) is None
+        ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=2101)
+        await handle_new_message(bot, ev)
+        await asyncio.sleep(0.1)
+        # بیو همان لحظه خوانده و ذخیره شد
+        assert client.calls == 1
+        record = bio_link_storage.get_user(chat_id, user.id)
+        assert record["link"] is True
+        assert record["label"] == "لینک تلگرام"
+        # و همان پیام اول حذف + اخطار شد
+        assert any(2101 in ids for _cid, ids in deleted)
+        assert len(actions.warnings) == 1
+        assert "لینک در بیوگرافی" in actions.warnings[0]["reason"]
+
+        # پیام دوم هیچ RPC جدیدی نمی‌زند
+        ev2 = FakeEvent(chat_id, user, "پیام دوم من", msg_id=2102)
+        await handle_new_message(bot, ev2)
+        await asyncio.sleep(0.05)
+        assert client.calls == 1
+        assert actions.warnings[-1]["count"] == 2
+
+    asyncio.run(_scenario())
+
+
+def test_first_message_with_clean_bio_is_not_punished(tmp_path, monkeypatch):
+    chat_id = -10099402
+    _setup_group(tmp_path, monkeypatch, chat_id)
+    _enable_live_checks(monkeypatch)
+    client = FakeClient(about="برنامه‌نویس پایتون، اهل تهران")
+    bot, deleted, tracker, actions = _make_bot(tmp_path, monkeypatch)
+    bot.client = client
+    user = SimpleNamespace(id=2201, first_name="پاک", username="clean_2201")
+
+    async def _scenario():
+        ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=2201)
+        await handle_new_message(bot, ev)
+        await asyncio.sleep(0.1)
+        assert client.calls == 1
+        assert bio_link_storage.get_user(chat_id, user.id)["link"] is False
+        assert actions.warnings == []
+        assert deleted == []
+
+    asyncio.run(_scenario())
+
+
+def test_first_message_with_inaccessible_bio_is_not_punished(tmp_path, monkeypatch):
+    chat_id = -10099403
+    _setup_group(tmp_path, monkeypatch, chat_id)
+    _enable_live_checks(monkeypatch)
+    client = FakeClient(error=RuntimeError("UserPrivacyRestricted"))
+    bot, deleted, tracker, actions = _make_bot(tmp_path, monkeypatch)
+    bot.client = client
+    user = SimpleNamespace(id=2301, first_name="خصوصی", username="priv_2301")
+
+    async def _scenario():
+        ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=2301)
+        await handle_new_message(bot, ev)
+        await asyncio.sleep(0.1)
+        record = bio_link_storage.get_user(chat_id, user.id)
+        assert record["status"] == bio_link_service.STATUS_NO_ACCESS
+        assert record["link"] is False
+        assert actions.warnings == []
+        assert deleted == []
+
+    asyncio.run(_scenario())
+
+
+def test_slow_api_never_blocks_message_and_falls_back_to_background(tmp_path, monkeypatch):
+    chat_id = -10099404
+    _setup_group(tmp_path, monkeypatch, chat_id)
+    _enable_live_checks(monkeypatch)
+    monkeypatch.setenv("BIO_LINK_AWAIT_TIMEOUT", "1")
+
+    class SlowClient(FakeClient):
+        def __call__(self, request):
+            self.calls += 1
+
+            async def _result():
+                await asyncio.sleep(5)
+                return SimpleNamespace(
+                    full_user=SimpleNamespace(about="t.me/x"), users=[], chats=[]
+                )
+
+            return _result()
+
+    client = SlowClient()
+    bot, deleted, tracker, actions = _make_bot(tmp_path, monkeypatch)
+    bot.client = client
+    user = SimpleNamespace(id=2401, first_name="کند", username="slow_2401")
+
+    async def _scenario():
+        start = asyncio.get_running_loop().time()
+        ev = FakeEvent(chat_id, user, "هوا امروز خوب است", msg_id=2401)
+        await handle_new_message(bot, ev)
+        elapsed = asyncio.get_running_loop().time() - start
+        assert elapsed < 3.5, f"پیام بیش از حد بلاک شد: {elapsed}"
+        # این پیام مجازات نمی‌شود (نتیجه هنوز نرسیده)
+        assert actions.warnings == []
+        assert deleted == []
+
+    asyncio.run(_scenario())
+    bio_link_service.reset_runtime_state()
+
+
+def test_member_auto_scan_is_off_by_default(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.delenv("BIO_LINK_AUTO_SCAN_MEMBERS", raising=False)
+    assert bio_link_service.auto_scan_members() is False
+    monkeypatch.setenv("BIO_LINK_AUTO_SCAN_MEMBERS", "1")
+    assert bio_link_service.auto_scan_members() is True
+
+
+def test_watcher_skips_scanning_when_policy_is_messages_only(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    monkeypatch.setenv("BIO_LINK_AUTO_SCAN_MEMBERS", "0")
+    monkeypatch.setenv("BIO_LINK_START_DELAY", "0")
+    monkeypatch.setenv("BIO_LINK_SCAN_INTERVAL", "300")
+    chat_id = -10099405
+    group_storage.activate_group(chat_id, "فعال")
+    client = FakeClient(about="site.com", participants=[SimpleNamespace(id=2501)])
+    bot = _bot(client)
+
+    async def _scenario():
+        task = asyncio.create_task(bio_link_service.watcher(bot))
+        await asyncio.sleep(0.3)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(_scenario())
+    assert client.participant_calls == 0
+    assert bio_link_storage.get_user(chat_id, 2501) is None
