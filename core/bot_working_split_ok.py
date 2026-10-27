@@ -725,7 +725,12 @@ class SoroushAntiSpamBot:
         # FloodWaitError, and caches that wait per TL constructor id.  Zero
         # turns it into an immediate exception handled by our own backoff
         # layer (modules/rpc_resilience.py).
-        flood_threshold = self._rpc_policy().flood_sleep_threshold_s
+        # Resolve without calling a method on ``self``: session-login tests
+        # invoke _make_client() with a bare SimpleNamespace stub.
+        # No attribute write here: the lazy accessor caches the policy when a
+        # real bot needs it, while a bare test stub stays untouched.
+        policy = getattr(self, "rpc_policy", None) or RpcPolicy.from_environment()
+        flood_threshold = policy.flood_sleep_threshold_s
         # Foxora2: API_ID/API_HASH are instance-scoped and must be validated
         # before being handed to SPlusthon.
         parsed_api_id = 0
