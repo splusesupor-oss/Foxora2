@@ -44,7 +44,12 @@ from modules.user_activity import flush as flush_user_activity
 from modules.game_progress_storage import flush_all as flush_game_progress
 from modules.reminders import due as due_reminders, mark_sent as mark_reminder_sent
 from modules.moderation_queue import ModerationQueue
-from modules.outgoing_profiler import instrument_client, instrument_event
+from modules.outgoing_profiler import (
+    instrument_client,
+    instrument_event,
+    start_orphan_watchdog,
+)
+from modules.rpc_policy import RpcPolicy
 from modules.message_delete_queue import MessageDeleteQueue
 from modules.notice_cleanup import NoticeCleanup
 from modules.outgoing_sender import install as install_outgoing_sender, install_event_wrapper
@@ -285,6 +290,12 @@ class SoroushAntiSpamBot:
         # One fair connection-wide application RPC budget. It is created by
         # outgoing_sender.install after .env has loaded and reused on rebuild.
         self.rpc_governor = None
+        # One policy object for every layer (client flood threshold, per-class
+        # RPC deadlines, FloodWait backoff, CONN TRACE pairing, watchdog).
+        # Built here, after .env has been loaded by main.py.
+        self.rpc_policy = RpcPolicy.from_environment()
+        self.rpc_flood_controller = None
+        self._rpc_watchdog_task = None
         # InputPeer cache used by ordinary replies; avoids per-message dialog
         # lookup while staying bounded for long-running multi-group sessions.
         self.reply_input_peer_cache = {}
@@ -675,6 +686,14 @@ class SoroushAntiSpamBot:
                 pass
             return 0
 
+    def _rpc_policy(self):
+        """Lazy accessor: test fixtures build the bot with ``__new__``."""
+        policy = getattr(self, "rpc_policy", None)
+        if policy is None:
+            policy = RpcPolicy.from_environment()
+            self.rpc_policy = policy
+        return policy
+
     def _make_client(self):
         """یک ``SoroushClient`` کاملاً جدید با سشنِ تازه می‌سازد.
 
@@ -701,6 +720,14 @@ class SoroushAntiSpamBot:
         else:
             session = StringSession()
 
+        # SPlusthon's default flood_sleep_threshold=60 makes _call silently
+        # ``await asyncio.sleep(e.seconds)`` INSIDE the RPC for every
+        # FloodWaitError, and caches that wait per TL constructor id.  Zero
+        # turns it into an immediate exception handled by our own backoff
+        # layer (modules/rpc_resilience.py).
+        flood_threshold = self._rpc_policy().flood_sleep_threshold_s
+        # Foxora2: API_ID/API_HASH are instance-scoped and must be validated
+        # before being handed to SPlusthon.
         parsed_api_id = 0
         clean_api_hash = str(raw_api_hash or "").strip()
         if raw_api_id and clean_api_hash:
@@ -710,9 +737,18 @@ class SoroushAntiSpamBot:
                 parsed_api_id = 0
 
         if parsed_api_id > 0 and clean_api_hash:
-            client = SoroushClient(session, parsed_api_id, clean_api_hash)
+            client = SoroushClient(
+                session, parsed_api_id, clean_api_hash,
+                flood_sleep_threshold=flood_threshold,
+            )
         else:
-            client = SoroushClient(session)
+            client = SoroushClient(
+                session, flood_sleep_threshold=flood_threshold,
+            )
+        try:
+            client.flood_sleep_threshold = flood_threshold
+        except Exception:
+            pass
         return client
 
     async def initialize_client(self):
@@ -731,7 +767,7 @@ class SoroushAntiSpamBot:
             self.logger.log_info("MEDIA_UPLOAD_PATCH_LOADED=False (module missing)")
 
         self.spammer_messages = defaultdict(lambda: deque(maxlen=5000))
-        instrument_client(self.client, self.logger)
+        instrument_client(self.client, self.logger, policy=self._rpc_policy())
 
         # 🛡️ لایهٔ پایداری اتصال.
         #
@@ -753,6 +789,7 @@ class SoroushAntiSpamBot:
             self.client,
             logger=self.logger,
             client_factory=self._rebuild_client,
+            policy=self._rpc_policy(),
         )
 
         self.admin_actions = AdminActions(
@@ -791,15 +828,15 @@ class SoroushAntiSpamBot:
             if old_builders is not None:
                 new_client._event_builders = list(old_builders)
 
-            instrument_client(new_client, self.logger)
+            instrument_client(new_client, self.logger, policy=self._rpc_policy())
 
-            # وصلهٔ سقف زمانی RPC را روی کلاینت جدید هم نصب کن
-            # (فیلتر قاب کهنه و حلقهٔ reset کلاس‌محورند و یک‌بار نصب شده‌اند)
+            # Deadline per request (same policy), not a scattered 60.0.
+            # (Stale-frame filter and the periodic-reset fix are class-level.)
             connection_guard.install_rpc_timeout(
                 new_client,
-                timeout=60.0,
                 on_timeout=self.connection_supervisor.note_rpc_timeout,
                 logger=self.logger,
+                policy=self._rpc_policy(),
             )
 
             await new_client.connect()
@@ -1038,6 +1075,11 @@ class SoroushAntiSpamBot:
         self.outgoing_sender = install_outgoing_sender(
             self.client, self, self.logger
         )
+        # One process-wide watchdog: any AWAIT START without a terminal line
+        # after (deadline + grace) is logged and its inner RPC task cancelled.
+        policy = self._rpc_policy()
+        self._rpc_watchdog_task = start_orphan_watchdog(self.logger, policy)
+        self.logger.log_info(f"RPC POLICY {policy.describe()}")
         # Live slow-handler monitoring is separate from crash delivery.  Its
         # bounded worker sends at most one owner report per cooldown window;
         # the message hot path performs no await, disk write, or network call.
