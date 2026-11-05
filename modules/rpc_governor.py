@@ -74,13 +74,23 @@ _SEND_REQUESTS = frozenset({
 _HEAVY_REQUESTS = frozenset({
     "GetHistoryRequest",
     "GetMessagesRequest",
-    "GetParticipantsRequest",
     "GetFullChannelRequest",
     "GetFullChatRequest",
     "GetChannelsRequest",
     "GetChatsRequest",
     "GetUsersRequest",
+    # 📄 خواندنِ پروفایل (GetFullUserRequest) قبلاً با باکتِ «other» و سقفِ
+    # send_limit=1 می‌رفت؛ یعنی یک خواندنِ پروفایل می‌توانست جای «ارسال پیام»
+    # را بگیرد (لاگ: RPC GOVERNOR WAIT GetFullUserRequest wait_ms=412.7 و بعد
+    # ERROR PERF WARNING stage=RECEIVE elapsed_ms=1218.02). حالا در لِینِ
+    # heavy است و با send/notice قاطی نمی‌شود.
+    "GetFullUserRequest",
 })
+
+# 🔁 «نظرسنجی» (polling) فهرست اعضا: همان اولویتِ پایینِ heavy، ولی باکتِ
+# مستقل تا با خواندن‌های سنگینِ تاریخچه/کانال سهمیهٔ مشترک نداشته باشد
+# (لاگ: ۱۳ فراخوانیِ GetParticipants با bucket=heavy که باکت را اشباع کرد).
+_POLL_REQUESTS = frozenset({"GetParticipantsRequest"})
 
 
 @dataclass(frozen=True)
@@ -308,6 +318,10 @@ def classify_request(request, *, urgent_send=False, critical_context=False,
         # send lane (architecture decision: separate lanes, one socket).
         priority = P2_SEND
         bucket = "notice" if channel == "notice" else "send"
+    # فهرستِ اعضا (polling) لِینِ جدا با سقفِ جدا دارد؛ پایین‌ترین اولویت است
+    # و هنگامِ بودنِ delete/notice/send در صف، شروع نمی‌شود.
+    elif name_set.intersection(_POLL_REQUESTS):
+        priority, bucket = P3_HEAVY, "poll"
     # Reads are never promoted by a command's dispatch context.  A native
     # admin lookup (GetParticipants/GetFullChannel) is expensive and was
     # filling every P0 slot ahead of the actual mute/ban RPC.
@@ -346,6 +360,7 @@ class RpcGovernor:
         send_limit=None,
         heavy_limit=None,
         notice_limit=None,
+        poll_limit=None,
         critical_reserve=0,
         enabled=True,
         shadow=False,
@@ -373,6 +388,9 @@ class RpcGovernor:
             heavy_limit = 1
         self.class_limits = {
             "delete": max(1, int(delete_limit)),
+            # لِینِ نظرسنجیِ فهرستِ اعضا؛ پیش‌فرض ۱ = یک GetParticipants
+            # هم‌زمان در کلِ پروسه (سقفِ مستقل از heavy).
+            "poll": max(1, int(poll_limit if poll_limit is not None else 1)),
             "send": max(1, int(send_limit)),
             "heavy": max(1, int(heavy_limit)),
             "notice": max(1, int(notice_limit or 1)),
@@ -469,6 +487,8 @@ class RpcGovernor:
             # Bounded send queue allows public commands and help replies to wait
             # without letting cosmetic/game flooding starve moderation.
             notice_limit=min(2, max(1, _env_int("BOT_RPC_NOTICE_LIMIT", 1))),
+            # سقفِ مستقلِ لِینِ GetParticipants (جدا از heavy و total).
+            poll_limit=min(2, max(1, _env_int("BOT_RPC_POLL_LIMIT", 1))),
             critical_reserve=_env_int("BOT_RPC_CRITICAL_RESERVE", 0, 0, 2),
             max_send_waiters=max(8, _env_int("BOT_RPC_MAX_SEND_WAITERS", 32)),
             # فاصلهٔ اختیاری بین شروع RPCها؛ knob محفوظ Foxora
@@ -534,8 +554,18 @@ class RpcGovernor:
         return self._waiting
 
     def _urgent_waiting(self):
-        """True when a P0/P1 waiter is queued (even if its own cap is full)."""
-        for priority in (P0_CRITICAL, P1_DELETE):
+        """True when a higher-priority waiter is queued (even if capped).
+
+        🎯 دلیلِ تغییر (لاگ 22:54:08.716): قبلاً فقط P0/P1 باعثِ yield می‌شد،
+        پس یک ``GetParticipantsRequest`` در حالِ اجرا اجازه می‌داد خواندن‌های
+        سنگینِ بعدی هم شروع شوند و ``notice``/``delete`` ۵۰۰ms در صف بمانند.
+        حالا صفِ send/notice هم باعثِ yield می‌شود؛ با
+        ``BOT_RPC_HEAVY_YIELD_P2=0`` قابلِ برگشت است.
+        """
+        priorities = [P0_CRITICAL, P1_DELETE]
+        if _env_bool("BOT_RPC_HEAVY_YIELD_P2", True):
+            priorities.append(P2_SEND)
+        for priority in priorities:
             groups = self._queues.get(priority) or {}
             for group in groups.values():
                 for waiter in group:
@@ -556,14 +586,20 @@ class RpcGovernor:
             cap = self._delete_cap()
         if cap is not None and self._active_by_bucket[bucket] >= cap:
             return False
+        read_active = (
+            int(self._active_by_bucket.get("heavy") or 0)
+            + int(self._active_by_bucket.get("poll") or 0)
+        )
         if priority <= P1_DELETE:
-            # Heavy occupancy must not stall delete/antispam. Send+delete
+            # Heavy/poll occupancy must not stall delete/antispam. Send+delete
             # still share noncritical_limit; total_limit and class caps stay.
-            occupied = self._active_noncritical - int(
-                self._active_by_bucket.get("heavy") or 0
-            )
+            occupied = max(0, self._active_noncritical - read_active)
             return occupied < self.noncritical_limit
-        if self._active_noncritical >= self.noncritical_limit:
+        # 🎯 readهای سنگین (heavy/poll) نباید سهمِ notice/other را بخورند.
+        # قبلاً این شرط با ``_active_noncritical`` خام سنجیده می‌شد، پس یک
+        # GetParticipantsِ در جریان + یک delete همهٔ سهم را پر می‌کرد و
+        # ``notice`` ~۵۰۳ms در صف می‌ماند (GOVERNOR HOLD SLOW bucket=notice).
+        if max(0, self._active_noncritical - read_active) >= self.noncritical_limit:
             return False
         if priority >= P3_HEAVY and self._urgent_waiting():
             return False
@@ -604,9 +640,33 @@ class RpcGovernor:
             )
         return parts
 
+    def culprit_for(self, holder=None):
+        """کندترین holderِ **دیگر** — چه چیزی صف/سِندر را گرفته است؟
+
+        🎯 در لاگ، ``reason=rpc_in_flight`` می‌گفت «یک RPC در جریان است» ولی
+        نمی‌گفت کدام؛ با ``culprit=`` معلوم می‌شود مثلاً
+        ``heavy:GetParticipantsRequest:chat=…:held_ms=612`` باعثِ ۵۰۳ms
+        ماندنِ ``notice``/``delete`` بوده است.
+        """
+        now = time.perf_counter()
+        best = None
+        for other in self._holders:
+            if other is holder:
+                continue
+            age = max(0.0, now - other.acquired_at)
+            if best is None or age > best[0]:
+                best = (age, other)
+        if best is None:
+            return "-"
+        age, other = best
+        return (
+            f"{other.bucket}:{other.request_name}"
+            f":chat={other.chat_key}:held_ms={age * 1000:.0f}"
+        )
+
     def format_active_by_bucket(self):
         buckets = {"critical": 0, "delete": 0, "send": 0, "heavy": 0,
-                   "notice": 0, "other": 0}
+                   "poll": 0, "notice": 0, "other": 0}
         buckets.update(dict(self._active_by_bucket))
         return ",".join(f"{name}:{int(count)}" for name, count in buckets.items() if count)
 
@@ -781,7 +841,8 @@ class RpcGovernor:
                     f"priority={_PRIORITY_LABELS[admission.priority]} "
                     f"bucket={admission.bucket} chat={admission.chat_key} "
                     f"wait_ms={wait_ms:.1f} active={self._active_total} "
-                    f"waiting={self._waiting}"
+                    f"waiting={self._waiting} "
+                    f"holders=[{','.join(self.format_holders()) or '-'}]"
                 )
                 self.logger.log_info(
                     "GOVERNOR ACQUIRE "
@@ -818,7 +879,7 @@ class RpcGovernor:
     def format_waiting_by_bucket(self):
         counts = {
             "critical": 0, "delete": 0, "send": 0, "heavy": 0,
-            "notice": 0, "other": 0,
+            "poll": 0, "notice": 0, "other": 0,
         }
         for groups in self._queues.values():
             for group in groups.values():
@@ -910,6 +971,7 @@ class RpcGovernor:
                 f"bucket={holder.bucket} request={holder.request_name} "
                 f"chat={holder.chat_key} held_ms={held_ms:.1f} "
                 f"reason=rpc_in_flight "
+                f"culprit={self.culprit_for(holder)} "
                 f"active={self._active_total} waiting={self._waiting} "
                 f"active_by_bucket={self.format_active_by_bucket() or '-'} "
                 f"waiting_by_bucket={self.format_waiting_by_bucket() or '-'} "
@@ -983,6 +1045,7 @@ class RpcGovernor:
                 "GOVERNOR RELEASE "
                 f"request={name} bucket={bucket} "
                 f"hold_ms={hold_ms:.1f} reason=rpc_in_flight "
+                f"culprit={self.culprit_for(holder)} "
                 f"active={self._active_total} waiting={self._waiting} "
                 f"waiting_by_bucket={self.format_waiting_by_bucket() or '-'} "
                 f"sender_pending={sender_pending} ping_age_ms={ping_age:.0f} "
@@ -994,7 +1057,7 @@ class RpcGovernor:
         waiting_by_priority = {}
         waiting_by_bucket = {
             "critical": 0, "delete": 0, "send": 0, "heavy": 0,
-            "notice": 0, "other": 0,
+            "poll": 0, "notice": 0, "other": 0,
         }
         for priority, groups in self._queues.items():
             waiting_by_priority[_PRIORITY_LABELS[priority]] = sum(
