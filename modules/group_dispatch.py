@@ -107,7 +107,7 @@ _ADMIN_EXACT = frozenset({
     "لیست انقضا", "مهلت گروه", "صفر",
     "هوش مصنوعی فعال", "هوش مصنوعی خاموش",
     "مجاز", "غیرمجاز", "غیر مجاز", "لیست هوش مصنوعی",
-    "پاکسازی خودکار", "لاگ مدیریتی",
+    "پاکسازی خودکار", "لاگ مدیریتی", "سرگرمی فعال",
     "ثبت قوانین", "حذف قوانین",
     "ریست آمار", "ریست اخراجی ها",
     "حذف اخطار", "حذف اخطارها",
@@ -125,6 +125,9 @@ _ADMIN_EXACT = frozenset({
     # behind ordinary spam traffic.
     "کپی بورد", "کپی",
     "لیست سکوت", "پاک لیست سکوت", "لیست اخراج", "پاک لیست اخراج",
+    # ⏰ «تأیید دو مرحله‌ای دستورات خطرناک» — فرمانِ مالک و پیامِ رمز نباید
+    # پشتِ صف عادی/هرزنگاری بمانند (رمز باید بی‌درنگ بررسی و پاک شود).
+    "دو مرحله ای", "لغو دو مرحله ای",
     "لیست فیلتر اسم", "لیست فیلتر نام", "فیلترهای اسم",
     "فیلتر اسم", "لغو اسم", "فیلتر نام", "لغو نام",
     # عضویت اجباری کانال — دستور مدیریتی، نه پیام عادی
@@ -170,8 +173,8 @@ _COMMAND_EXACT = frozenset({
     "کارگاه", "زامبی", "گروه آخرالزمان", "دادگاه", "دادگاه روباه",
     # 🧬 «پاکسازی کامل» یک دستورِ مدیریتی است و باید روی خط «دستور» بماند.
     "پاکسازی کامل",
-    # 🗂️ «پیام زماندار» مدیریتی است و «گزارش» عمومی؛ هر دو باید از صف عادی
-    # جدا بمانند تا زیر بار هرزنگاری گم نشوند.
+    # 🗂️ سه قابلیت جدید: «اختصاصی»/«پیام زماندار» مدیریتی‌اند و «گزارش»
+    # عمومی است؛ هر سه باید از صف عادی جدا بمانند تا زیر بار هرزنگاری گم نشوند.
     "پیام زماندار", "لغو پیام زماندار",
     "گزارش",
     # «شرکت» همان واژهٔ ثبت‌نام/پیوستن بازی‌هاست (بقا، خون آشام، نبرد،
@@ -323,7 +326,8 @@ class GroupDispatcher:
     HIGHER_LANE_WAIT_SECONDS = 0.0
 
     def __init__(self, *, max_pending_normal=None, logger=None,
-                 normal_concurrency=None, debug_timing=False):
+                 normal_concurrency=None, debug_timing=False,
+                 job_timeout_seconds=None):
         if max_pending_normal is None:
             max_pending_normal = os.getenv("BOT_MAX_PENDING_NORMAL", "120")
         self.max_pending_normal = max(20, min(500, int(max_pending_normal)))
@@ -337,6 +341,19 @@ class GroupDispatcher:
             )
         except (TypeError, ValueError):
             self.normal_concurrency = 6
+        if job_timeout_seconds is None:
+            try:
+                job_timeout_seconds = float(
+                    os.getenv("BOT_DISPATCH_JOB_TIMEOUT_S", "90")
+                )
+            except (TypeError, ValueError):
+                job_timeout_seconds = 90.0
+        try:
+            self.job_timeout_seconds = max(
+                0.0, min(600.0, float(job_timeout_seconds))
+            )
+        except (TypeError, ValueError):
+            self.job_timeout_seconds = 90.0
         self.logger = logger
         # 📝 در حالت عادی فقط موارد به‌شدت کند ثبت می‌شوند تا نوشتن مکرر
         # روی دیسک، خودش عامل کندی نشود؛ در حالت debug (کلید
@@ -359,6 +376,7 @@ class GroupDispatcher:
             "dropped": 0,
             "processed": 0,
             "failed": 0,
+            "timed_out": 0,
         }
 
     def pending_normal(self, chat_id):
@@ -524,10 +542,27 @@ class GroupDispatcher:
                 try:
                     result = factory() if factory is not None else None
                     if inspect.isawaitable(result):
-                        await result
+                        if self.job_timeout_seconds > 0.0:
+                            # A single stuck handler must not occupy the only
+                            # admin/command worker in this group forever.
+                            # wait_for cancels the child coroutine and this
+                            # worker continues with the next queued job.
+                            await asyncio.wait_for(
+                                result, timeout=self.job_timeout_seconds
+                            )
+                        else:
+                            await result
                     self.stats["processed"] += 1
                 except asyncio.CancelledError:
                     raise
+                except asyncio.TimeoutError:
+                    self.stats["timed_out"] += 1
+                    if self.logger is not None:
+                        self.logger.log_error(
+                            "GROUP DISPATCH JOB TIMEOUT "
+                            f"chat_id={chat_id} lane={lane} kind={kind} "
+                            f"timeout_s={self.job_timeout_seconds:g}"
+                        )
                 except Exception as error:
                     self.stats["failed"] += 1
                     if self.logger is not None:

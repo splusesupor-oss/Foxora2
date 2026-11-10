@@ -237,21 +237,13 @@ def is_permanent_auth_error(error) -> bool:
 def resolve_session_string(env_get=None, config_get=None, instance=None):
     """سلسله‌مراتب قطعی نشست: اختصاصی instance → عمومی → config.
 
-    برای Foxora2 متغیر اختصاصی ``SOROUSH_SESSION_STRING_FOXORA2`` حتماً در
+    برای Foxora متغیر اختصاصی ``SOROUSH_SESSION_STRING_FOXORA`` حتماً در
     اولویت اول است؛ نشست خرابِ generic/ربات دیگر فقط وقتی استفاده می‌شود
     که هیچ نشست اختصاصی‌ای تعریف نشده باشد.
     """
     if env_get is None:
         env_get = os.getenv
-    if not instance:
-        instance = (os.getenv("BOT_INSTANCE") or "").strip()
-    if not instance:
-        try:
-            from modules.runtime_paths import INSTANCE_NAME
-            instance = INSTANCE_NAME
-        except Exception:
-            instance = "foxora2"
-    instance = instance or "foxora2"
+    instance = (instance or os.getenv("BOT_INSTANCE", "main")).strip() or "main"
     value = env_get(f"SOROUSH_SESSION_STRING_{instance.upper()}")
     if value:
         return value
@@ -705,16 +697,9 @@ class SoroushAntiSpamBot:
         # سشن هر instance مستقل است: اول متغیر اختصاصی آن instance
         # (SOROUSH_SESSION_STRING_<INSTANCE>) و بعد متغیر عمومی چک می‌شود.
         # هیچ‌وقت سشن یک instance به دیگری منتقل یا overwrite نمی‌شود.
-        instance_key = (os.getenv("BOT_INSTANCE") or "foxora2").strip().upper() or "FOXORA2"
         session_str = resolve_session_string(config_get=self.config_manager.get)
-        raw_api_id = (
-            os.getenv(f"API_ID_{instance_key}")
-            or self.config_manager.get("api_id")
-        )
-        raw_api_hash = (
-            os.getenv(f"API_HASH_{instance_key}")
-            or self.config_manager.get("api_hash")
-        )
+        api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
+        api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
 
         if session_str:
             session = StringSession(session_str)
@@ -726,25 +711,10 @@ class SoroushAntiSpamBot:
         # FloodWaitError, and caches that wait per TL constructor id.  Zero
         # turns it into an immediate exception handled by our own backoff
         # layer (modules/rpc_resilience.py).
-        # Resolve without calling a method on ``self``: session-login tests
-        # invoke _make_client() with a bare SimpleNamespace stub.
-        # No attribute write here: the lazy accessor caches the policy when a
-        # real bot needs it, while a bare test stub stays untouched.
-        policy = getattr(self, "rpc_policy", None) or RpcPolicy.from_environment()
-        flood_threshold = policy.flood_sleep_threshold_s
-        # Foxora2: API_ID/API_HASH are instance-scoped and must be validated
-        # before being handed to SPlusthon.
-        parsed_api_id = 0
-        clean_api_hash = str(raw_api_hash or "").strip()
-        if raw_api_id and clean_api_hash:
-            try:
-                parsed_api_id = int(str(raw_api_id).strip())
-            except (TypeError, ValueError):
-                parsed_api_id = 0
-
-        if parsed_api_id > 0 and clean_api_hash:
+        flood_threshold = self._rpc_policy().flood_sleep_threshold_s
+        if api_id and api_hash:
             client = SoroushClient(
-                session, parsed_api_id, clean_api_hash,
+                session, api_id, api_hash,
                 flood_sleep_threshold=flood_threshold,
             )
         else:
@@ -1139,6 +1109,21 @@ class SoroushAntiSpamBot:
                 f"timed={len(_timed_restored)} reports={_reports_restored} "
                 f"exclusive={len(_exclusive_pending)}"
             )
+            # ⏰ «تأیید دو مرحله‌ای»: مسیرِ اجرای تأییدشدهٔ ۹ دستورِ خطرناک
+            # همین‌جا به روتر وصل می‌شود تا پس از رمزِ درست، همان دستور با
+            # پرچمِ «تأیید شد» اجرا شود (بدون نوشتنِ دوباره).
+            try:
+                from handlers.message_handler import (
+                    _two_factor_register_handlers,
+                )
+                self.logger.log_info(
+                    "TWO FACTOR HANDLERS REGISTERED "
+                    f"ok={_two_factor_register_handlers()}"
+                )
+            except Exception as two_factor_error:    # noqa: BLE001
+                self.logger.log_error(
+                    "TWO FACTOR HANDLERS REGISTER FAILED "
+                    f"error={two_factor_error!r}")
         except Exception as manage_recovery_error:   # noqa: BLE001
             self.logger.log_error(
                 "MANAGE FEATURES RECOVERY FAILED "
@@ -1388,9 +1373,7 @@ class SoroushAntiSpamBot:
             self.cleanup_tasks = {}
         asyncio.create_task(run_cleanup_watcher(self, logger=self.logger))
 
-        # 🖇 ناظر «فیلتر لینک بیوگرافی» — اسکن دوره‌ای و سبک اعضای گروه‌های
-        # فعال با سقف تعداد، بودجهٔ زمانی و فاصلهٔ RPC. بدون هیچ درخواست
-        # تکراری: هر کاربر فقط پس از انقضای TTL دوباره بررسی می‌شود.
+        # 🖇 ناظر «فیلتر لینک بیوگرافی» — سیاست پیش‌فرض: فقط کاربران پیام‌دهنده.
         async def bio_link_watcher_loop():
             try:
                 await bio_link_service.watcher(self, logger=self.logger)
@@ -1438,7 +1421,6 @@ class SoroushAntiSpamBot:
             self.logger.log_error(
                 f"GROWTH RECORDER SETUP FAILED error={growth_setup_error!r}"
             )
-
 
         # 🌙 ناظر گزارش فعالیت کمترین ادمین در ساعت ۱۱ شب (۲۳:۰۰ به وقت تهران)
         async def daily_admin_report_loop():
@@ -1572,7 +1554,6 @@ class SoroushAntiSpamBot:
 
                 user_id = user.id
                 # 🖇 عضو تازه: بیوگرافی‌اش یک بار (در پس‌زمینه) بررسی می‌شود.
-                # این یک RPC است و مسیر ورود عضو را بلاک نمی‌کند.
                 try:
                     if bio_link_service.check_on_join():
                         bio_link_service.schedule_check(self, chat_id, user)
@@ -1915,6 +1896,7 @@ class SoroushAntiSpamBot:
                     "حدس ایموجی", "حدس جمله", "ساخت جمله", "معما", "حدس پرچم",
                     "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
                     "جعبه شانسی", "خون آشام", "خون‌آشام",
+                    "دادگاه", "دادگاه روباه",
                     "فعال", "غیر فعال", "فعال سازی",
                     "ثبت مالک", "لغو مالک", "برکناری مالک",
                     "ثبت گروه", "حذف گروه",
