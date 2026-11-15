@@ -196,17 +196,40 @@ async def main():
     # ---- 7. environment defaults and kill switch
     env = RpcGovernor.from_environment()
     check("runtime default: extra slot available", env.adaptive_extra == 1)
-    check("base limits untouched", env.total_limit == 2
-          and env.class_limits["send"] == 1 and env.class_limits["heavy"] == 1)
     os.environ["BOT_RPC_ADAPTIVE_EXTRA"] = "0"
     off = RpcGovernor.from_environment()
-    make_healthy(off)
-    x = await off.acquire(adm("send")); y = await off.acquire(adm("read"))
-    check("BOT_RPC_ADAPTIVE_EXTRA=0 switches it off",
-          off.adaptive_extra == 0
-          and off._eligible(P1_DELETE, "delete", "DeleteMessagesRequest") is False)
-    x.release(); y.release()
     os.environ.pop("BOT_RPC_ADAPTIVE_EXTRA")
+    check("base limits untouched",
+          env.total_limit == off.total_limit
+          and env.class_limits == off.class_limits
+          and env.noncritical_limit == off.noncritical_limit
+          and env.critical_reserve == off.critical_reserve
+          and env.class_limits["send"] == 1 and env.class_limits["heavy"] == 1)
+    make_healthy(off)
+    make_healthy(env)
+    for governor in (off, env):
+        governor._held = [
+            await governor.acquire(adm(kind, chat=str(i)))
+            for i, kind in enumerate(
+                ["send", "read", "poll"][:governor.total_limit])
+        ]
+    check("BOT_RPC_ADAPTIVE_EXTRA=0 switches it off",
+          off.adaptive_extra == 0 and off.active == off.total_limit
+          and off._eligible(P1_DELETE, "delete", "DeleteMessagesRequest") is False)
+    check("runtime default: delete passes a full road when the server is fast",
+          env.active == env.total_limit
+          and env._eligible(P1_DELETE, "delete", "DeleteMessagesRequest") is True)
+    extra = await env.acquire(adm("delete", chat="9"))
+    peak = env.total_limit + max(env.critical_reserve, env.adaptive_extra)
+    check("peak in flight = total + max(reserve, extra), never stacked",
+          env.active == peak == env.total_limit + 1
+          and env._eligible(P0_CRITICAL, "critical", "EditBannedRequest") is False,
+          (env.active, peak))
+    extra.release()
+    for governor in (off, env):
+        for permit in governor._held:
+            permit.release()
+    check("all clean", env.active == 0 and off.active == 0)
 
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0

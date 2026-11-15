@@ -697,7 +697,9 @@ class RpcGovernor:
             and self._express_open()
         )
         if express:
-            limit += self.adaptive_extra
+            # Never stacked on the P0 reserve: the peak in flight stays at
+            # total_limit + max(critical_reserve, adaptive_extra).
+            limit = max(limit, self.total_limit + self.adaptive_extra)
         if self._active_total >= limit:
             return False
         if priority == P0_CRITICAL:
