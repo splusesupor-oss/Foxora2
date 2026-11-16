@@ -13,6 +13,7 @@ FOXORA2_DIR="$(cd "$(dirname "$0")" && pwd)"
 FOXORA2_DATA="${SOROUSH_BOT_DATA_DIR_FOXORA2:-$HOME/.foxora2}"
 PID_FILE="$FOXORA2_DATA/config/bot.pid"
 WATCHDOG_LOCK="$FOXORA2_DATA/config/watchdog.lock"
+STOP_TIMEOUT_SECONDS=15
 
 export BOT_INSTANCE=foxora2
 cd "$FOXORA2_DIR"
@@ -30,6 +31,18 @@ _is_foxora2_pid() {
         tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Eq "(foxora2\.py|$FOXORA2_DIR)" || return 1
     fi
     return 0
+}
+
+_wait_for_exit() {
+    local pid="$1"
+    local attempt
+    for ((attempt = 0; attempt < STOP_TIMEOUT_SECONDS * 5; attempt++)); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    ! kill -0 "$pid" 2>/dev/null
 }
 
 _read_watchdog_pid() {
@@ -72,26 +85,27 @@ case "${1:-run}" in
         wd_pid="$(_read_watchdog_pid)"
         if [ -n "$wd_pid" ] && _is_foxora2_pid "$wd_pid"; then
             kill "$wd_pid" 2>/dev/null || true
-            for _ in 1 2 3 4 5 6 7 8 9 10; do
-                kill -0 "$wd_pid" 2>/dev/null || break
-                sleep 0.2
-            done
+            if ! _wait_for_exit "$wd_pid"; then
+                echo "Foxora2 watchdog (pid=$wd_pid) هنوز متوقف نشده است؛ فایل‌های قفل حفظ شدند." >&2
+                exit 1
+            fi
             echo "Foxora2 watchdog (pid=$wd_pid) stopped."
             stopped_any=1
         fi
-        rm -f "$WATCHDOG_LOCK"
+
+        # Watchdog normally stops the bot child. If it did not, stop only a
+        # verified Foxora2 process and leave PID/lock files for their owners.
         if [ -f "$PID_FILE" ]; then
             pid="$(cat "$PID_FILE" 2>/dev/null || true)"
             if [ -n "$pid" ] && _is_foxora2_pid "$pid"; then
                 kill "$pid" 2>/dev/null || true
-                for _ in 1 2 3 4 5 6 7 8 9 10; do
-                    kill -0 "$pid" 2>/dev/null || break
-                    sleep 0.2
-                done
+                if ! _wait_for_exit "$pid"; then
+                    echo "Foxora2 (pid=$pid) هنوز متوقف نشده است؛ فایل‌های قفل حفظ شدند." >&2
+                    exit 1
+                fi
                 echo "Foxora2 (pid=$pid) stopped."
                 stopped_any=1
             fi
-            rm -f "$PID_FILE"
         fi
         if [ "$stopped_any" -eq 0 ]; then
             echo "Foxora2 is not running."

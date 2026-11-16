@@ -1,6 +1,8 @@
+import atexit
+import asyncio
+import errno
 import os
 import sys
-import atexit
 
 # launcher این clone — BOT_INSTANCE باید قبل از هر import پروجه
 # (و قبل از لود شدن .env) قطعی شود: modules/runtime_paths در زمان
@@ -32,78 +34,99 @@ load_dotenv(override=False)
 from core.bot_working_split_ok import FatalAuthError, SoroushAntiSpamBot
 from modules.time_utils import TEHRAN, now_local
 from modules.watchdog_reporting import FATAL_AUTH_EXIT_CODE
-import asyncio
+
+
+_INSTANCE_LOCK_STREAM = None
 
 
 def _acquire_instance_lock():
-    """Single-instance guard.
+    """قفل اتمیک و ماندگار برای جلوگیری از دو کلاینت با یک نشست.
 
-    دو پروس با همان session string نمی‌توانند همزمان کار کنند: سرور
-    MTProto updateها را فقط به یکی می‌دهد و پروس دیگر زنده ولی
-    بی‌تحرک می‌ماند (همه گروه‌ها «مرده» به نظر می‌رسند). این قفل از
-    اجرای همزمان جلوگیری می‌کند و دلایلش را در ترمینال می‌نویسد.
+    فایل bot.pid عمداً پس از خروج حذف نمی‌شود: حذف فایلِ در حال flock می‌تواند
+    باعث شود اجرای بعدی روی inode تازه قفل بگیرد و هم‌زمان با قفل قدیمی اجرا شود.
+    قفل هسته‌ای تا خروج فرایند نگه داشته می‌شود؛ PID فقط برای status/stop است.
     """
+    global _INSTANCE_LOCK_STREAM
     try:
+        import fcntl
         from pathlib import Path
         from modules.runtime_paths import runtime_config_file
-        # 🐛 fix: migrate=False الزامی است — bot.pid یک فایل گذرا و
-        # per-process است؛ کپی‌شدن bot.pid کهنهٔ instance اصلی (main) به
-        # config یک instance تازه (bot2/bot3) باعث می‌شد instance جدید فکر
-        # کند پروسه‌ی دیگری قفل را دارد و بی‌دلیل خارج شود.
+
         lock = Path(runtime_config_file("bot.pid", migrate=False))
-    except Exception:
-        return None
-    pid = os.getpid()
-    if lock.exists():
-        try:
-            old_pid = int((lock.read_text(encoding="utf-8").strip() or "0"))
-        except Exception:
-            old_pid = 0
-        if 0 < old_pid and old_pid != pid:
-            alive = False
-            try:
-                os.kill(old_pid, 0)
-                alive = True
-            except ProcessLookupError:
-                alive = False
-            except PermissionError:
-                alive = False  # پروس دیگر متعلق به ما نیست؛ قفل را می‌گیریم
-            if alive:
-                try:
-                    env_bytes = Path(f"/proc/{old_pid}/environ").read_bytes()
-                    cur_inst = os.environ.get("BOT_INSTANCE", "foxora2").strip()
-                    for item in env_bytes.split(b"\x00"):
-                        if item.startswith(b"BOT_INSTANCE="):
-                            other_inst = item.split(b"=", 1)[1].decode("utf-8", "ignore").strip()
-                            if other_inst and other_inst != cur_inst:
-                                alive = False
-                            break
-                except Exception:
-                    pass
-            if alive:
-                print("=" * 62)
-                print(" ⛔ BOT INSTANCE ALREADY RUNNING (pid=%d)" % old_pid)
-                print("    با یک session string فقط یک پروس update می‌گیرد؛")
-                print("    پروس دوم زنده است ولی هیچ پیامی نمی‌بیند.")
-                print("    پروس فعلی (pid=%d) خارج می‌شود." % pid)
-                print("    اول پروس قدیمی را ببند: kill %d" % old_pid)
-                print("=" * 62)
-                sys.exit(1)
+        stream = lock.open("a+", encoding="utf-8")
+    except Exception as error:
+        print(f"⛔ قفل اجرای Foxora2 باز نشد؛ برای جلوگیری از اجرای هم‌زمان خارج می‌شوم: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
     try:
-        lock.write_text(str(pid), encoding="utf-8")
-        atexit.register(
-            lambda: _release_instance_lock(lock, pid))
-    except Exception:
-        pass
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            stream.seek(0)
+            old_pid = (stream.read().strip() or "unknown")
+        except OSError:
+            old_pid = "unknown"
+        stream.close()
+        print("=" * 62)
+        print(f" ⛔ BOT INSTANCE ALREADY RUNNING (pid={old_pid})")
+        print("    با یک session string فقط یک پروس update می‌گیرد؛")
+        print("    پروس دوم زنده است ولی هیچ پیامی نمی‌بیند.")
+        print("    ابتدا پروس قبلی را با ./foxora2 stop متوقف کنید.")
+        print("=" * 62)
+        raise SystemExit(1)
+    except OSError as error:
+        stream.close()
+        print(f"⛔ قفل اجرای Foxora2 برقرار نشد؛ اجرا را ادامه نمی‌دهم: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+    pid = os.getpid()
+    try:
+        stream.seek(0)
+        stream.truncate()
+        stream.write(f"{pid}\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    except OSError as error:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+        print(f"⛔ PID قفل Foxora2 ذخیره نشد؛ اجرا را ادامه نمی‌دهم: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+    _INSTANCE_LOCK_STREAM = stream
+    atexit.register(_release_instance_lock, lock, pid, stream)
     return lock
 
 
-def _release_instance_lock(lock, pid):
+def _release_instance_lock(lock, pid, stream=None):
+    """PID را بی‌خطر خالی می‌کند و سپس قفل همان inode را آزاد می‌کند."""
+    global _INSTANCE_LOCK_STREAM
+    stream = stream or _INSTANCE_LOCK_STREAM
+    if stream is None:
+        return
     try:
-        if int((lock.read_text(encoding="utf-8").strip() or "0")) == pid:
-            lock.unlink()
-    except Exception:
+        stream.seek(0)
+        current = stream.read().strip()
+        if current == str(pid):
+            stream.seek(0)
+            stream.truncate()
+            stream.write("0\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError:
         pass
+    try:
+        import fcntl
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError):
+        pass
+    try:
+        stream.close()
+    except OSError:
+        pass
+    if _INSTANCE_LOCK_STREAM is stream:
+        _INSTANCE_LOCK_STREAM = None
 
 
 async def main():
@@ -140,6 +163,7 @@ async def main():
         print(" نشست/دادهٔ ربات‌های دیگر (Foxora / B2) تغییر نمی‌کند.")
         print("=" * 62)
         raise SystemExit(FATAL_AUTH_EXIT_CODE)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
