@@ -442,9 +442,10 @@ class RpcGovernor:
             "other": 1,
         }
         # Optional extra slot usable ONLY by P0 moderation/connection RPCs.
-        # Default 0 keeps the historical peak in flight; set
-        # BOT_RPC_CRITICAL_RESERVE=1 on very busy deployments so a slow send
-        # never makes EditBanned wait for a permit.
+        # The constructor default stays 0 (bit-for-bit for direct use/tests);
+        # ``from_environment`` now defaults it to 1 for busy deployments so a
+        # slow send never makes EditBanned wait for a permit. Override with
+        # BOT_RPC_CRITICAL_RESERVE=0 to restore the historical peak.
         self.critical_reserve = max(0, int(critical_reserve))
         if isolated_default:
             # Send and delete each have their own cap. They share the
@@ -509,8 +510,18 @@ class RpcGovernor:
 
     @classmethod
     def from_environment(cls, logger=None):
-        """Build conservative fixed limits after the project's .env is loaded."""
-        total_limit = min(3, max(2, _env_int("BOT_RPC_TOTAL_LIMIT", 2)))
+        """Build fixed limits after the project's .env is loaded.
+
+        پیش‌فرض‌های «استقرارِ شلوغ» (گروه‌های بزرگ/پرحجم):
+          • ``BOT_RPC_TOTAL_LIMIT=3``  → توانِ ~۵۰٪ بیشتر روی اتصالِ سالم.
+          • ``BOT_RPC_CRITICAL_RESERVE=1`` → یک اسلاتِ **اختصاصیِ P0** (بن/سکوت/
+            EditBanned/اتصال) که هیچ ارسالِ کندی نمی‌تواند آن را اشغال کند، پس
+            «کارِ حیاتی پشتِ ارسال نمی‌ماند».
+        اگر سروش FloodWait داد، همان ``BOT_RPC_TOTAL_LIMIT=2`` در فایلِ ``.env``
+        فوراً رفتارِ محافظه‌کارِ قبلی را برمی‌گرداند (flood-guard و adaptive
+        هم به‌طور خودکار delete را به ۱ و express را موقتاً می‌بندند).
+        """
+        total_limit = min(3, max(2, _env_int("BOT_RPC_TOTAL_LIMIT", 3)))
         # BOT_RPC_DELETE_LIMIT=auto → سقف ۲ برای bucket=delete، ولی «مشروط»:
         # به‌محضِ دیدن یک FloodWait روی همین باکت، تا پایانِ cooldown به ۱
         # برمی‌گردد (پایین‌تر: note_flood_wait/_delete_cap).
@@ -547,7 +558,7 @@ class RpcGovernor:
             notice_limit=min(2, max(1, _env_int("BOT_RPC_NOTICE_LIMIT", 1))),
             # سقفِ مستقلِ لِینِ GetParticipants (جدا از heavy و total).
             poll_limit=min(2, max(1, _env_int("BOT_RPC_POLL_LIMIT", 1))),
-            critical_reserve=_env_int("BOT_RPC_CRITICAL_RESERVE", 0, 0, 2),
+            critical_reserve=_env_int("BOT_RPC_CRITICAL_RESERVE", 1, 0, 2),
             max_send_waiters=max(8, _env_int("BOT_RPC_MAX_SEND_WAITERS", 32)),
             # فاصلهٔ اختیاری بین شروع RPCها؛ knob محفوظ Foxora
             # (RPC_MIN_INTERVAL_SECONDS، پیش‌فرض off تا رفتار B2 حفظ شود).
