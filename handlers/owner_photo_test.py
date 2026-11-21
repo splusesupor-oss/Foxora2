@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Owner-only diagnostic command: «ارسال عکس» (Foxora2 session client).
 
-Send one bundled JPEG through the same SPlusthon media-upload path as the
-other photos. If upload fails, reply with the exception type and message;
-never mistake a text link for a successfully delivered photo.
+Send the generated JPEG by its public URL. SPlusthon converts a JPG URL to
+InputMediaPhotoExternal, so this command never uploads local file parts or
+needs a media sender. If Soroush rejects the URL, show the actual error.
 """
 from __future__ import annotations
 
@@ -18,6 +18,9 @@ from modules.owner_check import is_global_owner
 
 COMMAND = "ارسال عکس"
 PHOTO_PATH = Path(__file__).resolve().parents[1] / "static" / "photo_send_test.jpg"
+# Public copy of the generated JPEG committed to Foxora2; no local upload.
+PHOTO_URL = ("https://raw.githubusercontent.com/splusesupor-oss/Foxora2/"
+             "main/static/photo_send_test.jpg")
 SEND_TIMEOUT = 60
 PEER_TIMEOUT = 8
 
@@ -142,10 +145,10 @@ async def _reply_status(bot, event, text, target=None):
 
 
 async def handle(bot, event):
-    """Consume exact command, send the JPEG, or show the real upload error.
+    """Consume exact command, send external photo, or show the server error.
 
-    Non-owners receive nothing. An edited message never triggers another
-    upload. The command is routed before normal private/group commands.
+    Non-owners receive nothing. Edits never trigger another send. This path
+    avoids local SaveFilePart requests and the unavailable media sender.
     """
     if not is_command(_text(event)):
         return False
@@ -166,19 +169,15 @@ async def handle(bot, event):
 
     target = None
     try:
-        if not PHOTO_PATH.is_file():
-            raise FileNotFoundError(f"عکس آزمایشی روی سرور نیست: {PHOTO_PATH}")
-        with PHOTO_PATH.open("rb") as photo:
-            if photo.read(3) != b"\xff\xd8\xff":
-                raise ValueError(f"فایل آزمایشی JPEG نیست: {PHOTO_PATH}")
         client = getattr(bot, "client", None)
         if not callable(getattr(client, "send_file", None)):
             raise AttributeError("کلاینت سشنی متد send_file ندارد")
         target = await _target(bot, event)
-        _log(bot, f"PHOTO TEST SEND START chat_id={chat_id} "
-                  f"bytes={PHOTO_PATH.stat().st_size}")
+        _log(bot, f"PHOTO TEST SEND START via=external_url chat_id={chat_id}")
+        # For a JPG URL SPlusthon builds InputMediaPhotoExternal (no
+        # upload.SaveFilePart, regardless of media-sender availability).
         result = await asyncio.wait_for(
-            client.send_file(target, str(PHOTO_PATH),
+            client.send_file(target, PHOTO_URL,
                              caption="🧪 تست ارسال عکس", force_document=False),
             SEND_TIMEOUT,
         )

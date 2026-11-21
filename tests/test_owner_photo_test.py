@@ -92,28 +92,29 @@ class OwnerPhotoTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(feature.PHOTO_PATH.is_file())
         self.assertEqual(feature.PHOTO_PATH.read_bytes()[:3], b"\xff\xd8\xff")
         self.assertLess(feature.PHOTO_PATH.stat().st_size, 1_000_000)
+        self.assertTrue(feature.PHOTO_URL.startswith("https://raw.githubusercontent.com/"))
+        self.assertTrue(feature.PHOTO_URL.endswith("/static/photo_send_test.jpg"))
 
-    async def test_owner_sends_one_local_jpg_to_resolved_peer(self):
+    async def test_owner_sends_public_jpg_url_to_resolved_peer(self):
         peer = object()
         event = FakeEvent(peer=peer)
         self.assertTrue(await feature.handle(self.bot, event))
         self.assertEqual(len(self.bot.client.photo_calls), 1)
-        (target, filepath), kwargs = self.bot.client.photo_calls[0]
+        (target, url), kwargs = self.bot.client.photo_calls[0]
         self.assertIs(target, peer)
-        self.assertEqual(Path(filepath), feature.PHOTO_PATH)
+        self.assertEqual(url, feature.PHOTO_URL)
         self.assertIs(kwargs["force_document"], False)
         self.assertFalse(event.replies)
         self.assertTrue(any("PHOTO TEST SEND RETURNED" in text
                             for text in self.bot.logger.infos))
 
-    async def test_failed_upload_shows_exact_exception_to_owner(self):
-        self.bot.client.error = RuntimeError("FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER")
+    async def test_rejected_external_url_shows_exact_error_to_owner(self):
+        self.bot.client.error = RuntimeError("URL_INVALID")
         event = FakeEvent(peer=object(), message_id=21)
         self.assertTrue(await feature.handle(self.bot, event))
         self.assertEqual(len(self.bot.client.photo_calls), 1)
         self.assertEqual(len(event.replies), 1)
-        self.assertIn("RuntimeError: FILE_REQUEST_RECEIVED_ON_CONNECTION_SERVER",
-                      event.replies[0])
+        self.assertIn("RuntimeError: URL_INVALID", event.replies[0])
         self.assertTrue(any("PHOTO TEST SEND FAILED" in text
                             for text in self.bot.logger.errors))
 
@@ -168,14 +169,15 @@ class OwnerPhotoTests(unittest.IsolatedAsyncioTestCase):
         event.message.peer_id = type("PeerUser", (), {})()
         self.assertTrue(feature.is_private_chat(event))
 
-    async def test_missing_asset_is_reported_without_upload(self):
+    async def test_missing_local_asset_does_not_block_external_url(self):
         with tempfile.TemporaryDirectory() as temporary:
             with patch.object(feature, "PHOTO_PATH",
                               Path(temporary) / "missing.jpg"):
                 event = FakeEvent(message_id=27)
                 self.assertTrue(await feature.handle(self.bot, event))
-        self.assertFalse(self.bot.client.photo_calls)
-        self.assertIn("FileNotFoundError", event.replies[0])
+        self.assertEqual(len(self.bot.client.photo_calls), 1)
+        self.assertEqual(self.bot.client.photo_calls[0][0][1], feature.PHOTO_URL)
+        self.assertFalse(event.replies)
 
     async def test_timeout_is_reported(self):
         self.bot.client.delay = 0.05
