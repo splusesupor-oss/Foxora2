@@ -89,6 +89,10 @@ from handlers.private_handler import (
     register_private_handlers,
     try_handle_private_start,
 )
+from handlers.owner_photo_test import (
+    handle as handle_owner_photo_test,
+    is_private_chat as is_photo_test_private_chat,
+)
 from modules.name_family import cancel_round as cancel_name_family_round
 from modules.broadcast_state import (
     BROADCAST_COMMAND_WORDS,
@@ -3161,6 +3165,23 @@ class SoroushAntiSpamBot:
                                 pass
             except Exception:
                 pass
+            # گاهی SPlusthon پیویِ مالک را is_private=False گزارش می‌کند.
+            # فقط اگر PeerUser صریحاً نشان دهد چت خصوصی است، تستِ عکس را
+            # پیش از گیتِ اشتراکِ گروه بررسی کن؛ گروه‌های غیرفعال همچنان
+            # بدون هیچ استثنایی در همان گیت متوقف می‌شوند.
+            if (not getattr(event, "is_private", False)
+                    and is_photo_test_private_chat(event)):
+                try:
+                    if await handle_owner_photo_test(self, event):
+                        return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as photo_test_error:
+                    self.logger.log_error(
+                        "OWNER PHOTO TEST PRIVATE ROUTE FAILED "
+                        f"chat_id={getattr(event, 'chat_id', None)} "
+                        f"error={photo_test_error!r}"
+                    )
             # 🚪 گیتِ واحدِ «اشتراک گروه» — فعال‌سازی + انقضا.
             #
             # اگر گروه هنوز «فعال» نشده باشد (تا رسیدنِ دستورِ فعال‌سازی) یا
@@ -3230,6 +3251,20 @@ class SoroushAntiSpamBot:
                     "NATIVE ADMIN WARNING DELETE FAILED "
                     f"chat_id={getattr(event, 'chat_id', None)} "
                     f"error={warning_drop_error!r}"
+                )
+            # 🧪 دستورِ تشخیصی «ارسال عکس» فقط برای مالکِ سراسری. همین‌جا،
+            # پس از گیتِ گروه و قبل از مسیرهای خصوصی/گروهی مصرف می‌شود تا
+            # شکستِ آپلود به‌جای سکوت، به همان چت پاسخ داده شود.
+            try:
+                if await handle_owner_photo_test(self, event):
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception as photo_test_error:
+                self.logger.log_error(
+                    "OWNER PHOTO TEST HANDLER FAILED "
+                    f"chat_id={getattr(event, 'chat_id', None)} "
+                    f"error={photo_test_error!r}"
                 )
             try:
                 if await try_handle_private_start(self, event):
