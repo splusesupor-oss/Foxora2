@@ -1779,6 +1779,29 @@ class SoroushAntiSpamBot:
             previous_name = previous.__class__.__name__ if previous else "None"
             current_name = current.__class__.__name__ if current else "None"
 
+            # 🛡️ تغییر نقش بومی (ارتقا/عزل ادمین یا سازنده) همان لحظه در کش
+            # معافیت اعمال می‌شود؛ وگرنه ادمینِ عزل‌شده تا انقضای کش همچنان
+            # معاف می‌ماند و مثل کاربر عادی با او رفتار نمی‌شود.
+            try:
+                _role_chat_id = getattr(update, "channel_id", None)
+                _role_user_id = getattr(update, "user_id", None)
+                if _role_chat_id is not None and _role_user_id is not None:
+                    from modules import native_admin_exemption
+                    _was_admin = native_admin_exemption.participant_is_admin(
+                        previous)
+                    _is_admin_now = native_admin_exemption.participant_is_admin(
+                        current)
+                    if _was_admin != _is_admin_now:
+                        native_admin_exemption.note_participant_role(
+                            self, _role_chat_id, _role_user_id, current)
+                        self.logger.log_info(
+                            "NATIVE ADMIN ROLE CHANGED "
+                            f"chat_id={_role_chat_id} user_id={_role_user_id} "
+                            f"admin={_is_admin_now}"
+                        )
+            except Exception:
+                pass
+
             if "Banned" not in previous_name or "Banned" in current_name:
                 return
 
