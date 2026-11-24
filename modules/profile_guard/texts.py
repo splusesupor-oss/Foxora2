@@ -229,6 +229,35 @@ def notice_bio(user: str, matched: Optional[str], *,
     return builder.build()
 
 
+
+def notice_story(user: str, caption: str, *, duration_seconds: int,
+                 deleted: bool, muted: bool) -> Tuple[str, List[object]]:
+    """هشدار کپشن استوری، با وضعیت واقعی درخواست‌های حذف و سکوت."""
+    builder = _Builder()
+    builder.add(HEADER.format(user=user), bold=BOLD_HEADER, quote=True)
+    prefix = "پیام شما پاک شد" if deleted else "حذف پیام تأیید نشد"
+    builder.add("\n" + prefix + " | دلیل : ")
+    builder.add("کپشن استوری فیلتر شده", bold=BOLD_REASON)
+    builder.add("\n\n")
+    _bullets(builder, [
+        ("کپشن استوری", caption, False),
+        (LABEL_PUNISH, punish_label(duration_seconds) if muted else "سکوت اعمال نشد", False),
+    ])
+    return builder.build()
+
+
+
+def story_enabled(count: int) -> Tuple[str, List[object]]:
+    builder = _Builder()
+    builder.add("⚠️ ضد استوری تبلیغات کاربران فعال شد", bold=BOLD_ENABLE_TITLE)
+    builder.add("\n" + ENABLE_COUNT.format(count=int(count)))
+    return builder.build()
+
+
+def story_disabled() -> str:
+    return "▪️ضد استوری تبلیغات روباه خاموش شد"
+
+
 def enabled(count: int) -> Tuple[str, List[object]]:
     """پیام «فعال شد» همراهِ تعداد نام‌ها/جمله‌های فیلترشده."""
     builder = _Builder()
