@@ -13,6 +13,7 @@ from modules import admin_storage
 from modules.group_id import normalize_group_id
 from modules.group_storage import get_group_owner
 from modules.owner_check import get_owner, is_global_owner
+from modules.self_admin_shield import known_bot_id
 from modules.admin_help_builder import MessageEntityBold, MessageEntityBlockquote, _u16
 
 COMMAND = "ریست ادمین ها"
@@ -48,15 +49,15 @@ def _allowed(chat_id, user_id):
     return owner is not None and str(owner) == str(user_id)
 
 
-def _protected(chat_id):
+def _protected(chat_id, bot_id):
     owner = get_group_owner(chat_id)
     global_owner = get_owner().get('user_id')
-    return {str(value) for value in (owner, global_owner) if value is not None}
+    return {str(value) for value in (owner, global_owner, bot_id) if value is not None}
 
 
-def _eligible(chat_id, data=None):
+def _eligible(chat_id, data=None, bot_id=None):
     data = admin_storage.load_admins() if data is None else data
-    protected = _protected(chat_id)
+    protected = _protected(chat_id, bot_id)
     rows = []
     seen = set()
     for entry in data.get(normalize_group_id(chat_id), []):
@@ -66,8 +67,9 @@ def _eligible(chat_id, data=None):
         if not user_id.isdecimal() or int(user_id) <= 0 or user_id in protected or user_id in seen:
             continue
         seen.add(user_id)
-        name = str(entry.get('name') or '').strip() or (
-            '@' + str(entry.get('username') or '').strip().lstrip('@'))
+        username = str(entry.get('username') or '').strip().lstrip('@')
+        name = ('@' + username if username else
+                ' '.join(str(entry.get('name') or '').split()))
         name = ' '.join(name.split())[:64].strip() or f'کاربر {user_id}'
         rows.append((user_id, name))
     return rows
@@ -79,28 +81,22 @@ def _entity(cls, text, part, *, start=0):
 
 
 def _panel(state):
+    """Exactly the supplied admin-list screenshot; no extra UI or raw IDs."""
     rows = state['rows']
-    lines = ['⚠️ : لیست ادمین های ثبت شده', '']
-    for number, (user_id, name) in enumerate(rows, 1):
-        marker = '☑️' if user_id in state['selected'] else '▫️'
-        lines.append(f'{marker} {number}- {name} | شناسه: {user_id}')
-    lines += [
-        '',
-        '🔺 اگر میخواهید فقط چند نفر را از ادمین ثبت شده خارج کنید گزینه هارو یکجا بنویسید',
-        'گزینه ۱ ۲ ۳',
-        '',
-        '🔺 اگر میخواهید همه خارج شوند بنویسید',
-        'تایید همه',
-        '',
-        'انتخاب همه | لغو انتخاب‌ها | لغو انتخاب ۱ | ریست ادمین‌های انتخاب‌شده | بازگشت',
-    ]
+    title = '⚠️ : لیست ادمین های ثبت شده'
+    selective = '🔺 اگر میخواهید فقط چند نفر را از ادمین ثبت شده خارج کنید گزینه هارو یکجا بنویسید'
+    all_users = '🔺 اگر میخواهید همه خارج شوند بنویسید\nتایید همه'
+    lines = [title, '']
+    for number, (_user_id, label) in enumerate(rows, 1):
+        lines.append(f'{number}_ {label}')
+    lines.extend(['', selective, '', all_users])
     text = '\n'.join(lines)
-    entities = [_entity(MessageEntityBold, text, lines[0])]
-    for part in (lines[-7], 'گزینه ۱ ۲ ۳', lines[-4], 'تایید همه'):
-        entities.append(_entity(MessageEntityBlockquote, text, part))
-    for part in ('گزینه ۱ ۲ ۳', 'تایید همه'):
-        entities.append(_entity(MessageEntityBold, text, part))
-    return text, [e for e in entities if e is not None]
+    return text, [
+        _entity(MessageEntityBold, text, title),
+        _entity(MessageEntityBlockquote, text, selective),
+        _entity(MessageEntityBlockquote, text, all_users),
+        _entity(MessageEntityBold, text, 'تایید همه'),
+    ]
 
 
 async def _show(event, state):
@@ -125,16 +121,16 @@ def _invalidate(chat_id, ids):
             ADMIN_PERMISSION_CACHE.pop(key, None)
 
 
-def _reset(chat_id, ids):
+def _reset(chat_id, ids, bot_id):
     """One atomic save, fresh recheck, no partial writes and no native RPC."""
     data = copy.deepcopy(admin_storage.load_admins())
     gid = normalize_group_id(chat_id)
-    eligible = dict(_eligible(chat_id, data))
+    eligible = dict(_eligible(chat_id, data, bot_id))
     chosen = set(ids) & set(eligible)
     if not chosen:
         return []
     existing = data.get(gid, [])
-    removed = [(user_id, eligible[user_id]) for user_id, _ in _eligible(chat_id, data)
+    removed = [(user_id, eligible[user_id]) for user_id, _ in _eligible(chat_id, data, bot_id)
                if user_id in chosen]
     usernames = {str(entry.get('username') or '').strip().lstrip('@').lower()
                  for entry in existing if isinstance(entry, dict)
@@ -168,7 +164,11 @@ async def handle(bot, event, chat_id, user_id, text):
             return True
         return False
     if value == COMMAND:
-        rows = _eligible(chat_id)
+        bot_id = known_bot_id(bot=bot)
+        if bot_id is None:
+            await event.reply('❌ شناسه حساب ربات مشخص نیست؛ ریست ادمین‌ها انجام نشد.')
+            return True
+        rows = _eligible(chat_id, bot_id=bot_id)
         if not rows:
             _sessions.pop(key, None)
             await event.reply('ℹ️ ادمین ثبت‌شدهٔ قابل‌ریستی برای این گروه وجود ندارد.')
@@ -229,7 +229,11 @@ async def handle(bot, event, chat_id, user_id, text):
             return True
         chosen = set(state['selected'])
     try:
-        removed = _reset(chat_id, chosen)
+        bot_id = known_bot_id(bot=bot)
+        if bot_id is None:
+            await event.reply('❌ شناسه حساب ربات مشخص نیست؛ ریست ادمین‌ها انجام نشد.')
+            return True
+        removed = _reset(chat_id, chosen, bot_id)
     except Exception as error:
         bot.logger.log_error(f'RESET REGISTERED ADMINS FAILED group={chat_id} error={error!r}')
         await event.reply('❌ ذخیره‌سازی انجام نشد؛ هیچ ادمینی ریست نشد. دوباره تلاش کنید.')
@@ -238,18 +242,14 @@ async def handle(bot, event, chat_id, user_id, text):
     if not removed:
         await event.reply('ℹ️ ادمین‌های انتخاب‌شده دیگر در فهرست ثبت‌شدهٔ این گروه نیستند؛ تغییری اعمال نشد.')
         return True
-    names = '\n'.join(f'• {name} | شناسه: {uid}' for uid, name in removed)
     actor = getattr(event, 'sender', None)
     actor_label = ('@' + str(getattr(actor, 'username', '') or '').lstrip('@')
                    if getattr(actor, 'username', None) else
                    ' '.join(str(getattr(actor, 'first_name', '') or '').split())
                    or str(user_id))
-    text = (f'🔺 ادمین های ثبت شده ریست شدند\n\nتعداد : « {len(removed)} نفر »\n\n'
-            f'افراد ریست‌شده:\n{names}\n\nانجام دهنده : {actor_label}\n'
-            'دسترسی ثبت‌شدهٔ ربات لغو شد؛ نقش واقعی سروش تغییر نکرد.')
     header = '🔺 ادمین های ثبت شده ریست شدند'
+    text = f'{header}\n\nتعداد : « {len(removed)} نفر »\nانجام دهنده : {actor_label}'
     await event.reply(text, formatting_entities=[
         _entity(MessageEntityBlockquote, text, header),
-        _entity(MessageEntityBold, text, header),
     ])
     return True

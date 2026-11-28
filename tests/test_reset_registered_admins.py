@@ -19,7 +19,7 @@ class Event:
     is_private = False
     def __init__(self, uid, text, chat=CHAT):
         self.chat_id, self.sender_id = chat, uid
-        self.sender = SimpleNamespace(id=uid)
+        self.sender = SimpleNamespace(id=uid, username='ioela' if uid == 10 else None)
         self.message = SimpleNamespace(id=101, message=text, edit_date=None)
         self.replies = []
     async def reply(self, text, **kwargs):
@@ -45,6 +45,7 @@ class Tests(unittest.TestCase):
                 {'user_id': '21', 'username': 'alice', 'name': 'علی'},
                 {'user_id': '22', 'username': 'bob', 'name': 'بابک'},
                 {'user_id': '23', 'username': 'carol'},
+                {'user_id': '70502893', 'username': 'foxora', 'name': 'Foxora.ai'},
                 '@legacy_only',
             ],
             '202': [{'user_id': '21', 'username': 'alice'}],
@@ -54,7 +55,7 @@ class Tests(unittest.TestCase):
         self.patch_global.start()
         self.patch_isglobal.start()
         reset._sessions.clear()
-        self.bot = SimpleNamespace(logger=SimpleNamespace(log_error=lambda _: None))
+        self.bot = SimpleNamespace(bot_account_id=70502893, logger=SimpleNamespace(log_error=lambda _: None))
 
     def tearDown(self):
         self.patch_isglobal.stop()
@@ -84,11 +85,21 @@ class Tests(unittest.TestCase):
                 opened, ev = await self.cmd(10, 'ریست ادمین ها')
                 self.assertTrue(opened)
                 panel = ev.replies[-1][0]
-                self.assertIn('شناسه: 21', panel)
-                self.assertIn('شناسه: 22', panel)
-                self.assertNotIn('شناسه: 10', panel)
-                self.assertNotIn('شناسه: 99', panel)
+                self.assertIn('1_ @alice', panel)
+                self.assertIn('2_ @bob', panel)
+                self.assertNotIn('شناسه:', panel)
+                self.assertNotIn('70502893', panel)
                 self.assertNotIn('legacy_only', panel)
+                self.assertNotIn('انتخاب همه |', panel)
+                self.assertNotIn('گزینه ۱ ۲ ۳', panel)
+                raw = panel.encode('utf-16-le')
+                entities = ev.replies[-1][1]['formatting_entities']
+                spans = lambda kind: [raw[e.offset*2:(e.offset+e.length)*2].decode('utf-16-le')
+                                      for e in entities if type(e).__name__ == kind]
+                self.assertEqual(len(spans('MessageEntityBlockquote')), 2)
+                self.assertEqual(spans('MessageEntityBold'),
+                                 ['⚠️ : لیست ادمین های ثبت شده', 'تایید همه'])
+                self.assertIn('تایید همه', spans('MessageEntityBlockquote')[1])
                 self.assertEqual(classify_priority('ریست ادمین ها', ev)[1], LANE_ADMIN)
                 selected, ev = await self.cmd(10, 'گزینه ۱ ۳')
                 self.assertTrue(selected)
@@ -98,14 +109,15 @@ class Tests(unittest.TestCase):
                 confirmed, ev = await self.cmd(10, 'تایید ریست ادمین ها')
                 self.assertTrue(confirmed)
                 self.assertIn('2 نفر', ev.replies[-1][0])
-                self.assertIn('علی', ev.replies[-1][0])
-                self.assertIn('@carol', ev.replies[-1][0])
+                self.assertNotIn('علی', ev.replies[-1][0])
+                self.assertNotIn('شناسه:', ev.replies[-1][0])
                 self.assertFalse(admin_storage.is_admin(CHAT, 21))
                 self.assertTrue(admin_storage.is_admin(CHAT, 22))
                 self.assertFalse(admin_storage.is_admin(CHAT, 23))
                 self.assertTrue(admin_storage.is_admin(OTHER, 21))
                 self.assertTrue(admin_storage.is_admin(CHAT, 10))
                 self.assertTrue(admin_storage.is_admin(CHAT, 99))
+                self.assertTrue(admin_storage.is_admin(CHAT, 70502893))
                 self.assertIn('@legacy_only', admin_storage.load_admins()['101'])
                 self.assertNotIn(('101', 21, 'alice'), message_handler.ADMIN_PERMISSION_CACHE)
                 self.assertIn(('101', 22, 'bob'), message_handler.ADMIN_PERMISSION_CACHE)
@@ -164,15 +176,15 @@ class Tests(unittest.TestCase):
                 ok, result = await self.cmd(10, 'تایید همه')
             self.assertTrue(ok)
             self.assertEqual(save.call_count, 1)
-            self.assertIn('نقش واقعی سروش تغییر نکرد', result.replies[-1][0])
+            self.assertIn('انجام دهنده : @ioela', result.replies[-1][0])
             self.assertEqual([row['user_id'] for row in admin_storage.load_admins()['101']
-                              if isinstance(row, dict)], ['10', '99'])
+                              if isinstance(row, dict)], ['10', '99', '70502893'])
         asyncio.run(scenario())
 
     def test_failed_save_and_unauthorized_no_mutation(self):
         async def scenario():
             await self.cmd(22, 'ریست ادمین ها')
-            self.assertEqual(len(admin_storage.load_admins()['101']), 6)
+            self.assertEqual(len(admin_storage.load_admins()['101']), 7)
             await self.cmd(10, 'ریست ادمین ها')
             await self.cmd(10, 'گزینه ۱')
             with patch.object(admin_storage, 'save_admins', side_effect=OSError('disk full')):
@@ -185,7 +197,8 @@ class Tests(unittest.TestCase):
     def test_no_eligible_admins_reports_without_session(self):
         async def scenario():
             admin_storage.save_admins({'101': [
-                {'user_id': '10'}, {'user_id': '99'}, '@legacy_only']})
+                {'user_id': '10'}, {'user_id': '99'},
+                {'user_id': '70502893', 'username': 'foxora'}, '@legacy_only']})
             handled, event = await self.cmd(10, 'ریست ادمین ها')
             self.assertTrue(handled)
             self.assertIn('وجود ندارد', event.replies[-1][0])
