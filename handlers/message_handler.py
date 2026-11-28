@@ -4897,6 +4897,25 @@ async def handle_new_message(bot, event):
                     bot, event, chat_id, photo_actor, message_text):
                 return
 
+        # One command-photo entry point BEFORE every ordinary group handler.
+        # Future commands added below automatically inherit the same behavior;
+        # owner photo registration itself returns above without any overlay.
+        # Core-only fast/protocol routes remain scoped at their entry points.
+        if not getattr(event, "is_private", False) and not (
+                getattr(event, "is_edit", False)
+                or getattr(event, "_is_edited_message", False)
+                or getattr(getattr(event, "message", None), "edit_date", None)):
+            from handlers import reset_registered_admins as _reset_flow
+            if _reset_flow.is_awaiting(chat_id, photo_actor):
+                overlay = None  # A confirmation is not a new command start.
+            else:
+                from handlers.command_photo_handler import install_on_event
+                overlay = install_on_event(
+                    bot, event, normalize_command(message_text),
+                    skip_if_game_active=True)
+            from handlers.command_photo_handler import bind_overlay
+            command_photo_token = bind_overlay(overlay)
+
         # 🧻 Reset only bot-registered admins (never native Soroush roles).
         # Handle owner selections before other workflows can consume «تایید».
         if not getattr(event, "is_private", False):
@@ -4937,19 +4956,6 @@ async def handle_new_message(bot, event):
                     f"chat_id={getattr(event, 'chat_id', None)} "
                     f"error={restrict_error!r}"
                 )
-
-        # One entry point for ALL normal group command handlers, including
-        # two-factor and full-purge paths that return before clean_text exists.
-        # Fast-core and protocol paths are wired at their own entry points.
-        if not getattr(event, "is_private", False) and not (
-                getattr(event, "is_edit", False)
-                or getattr(event, "_is_edited_message", False)
-                or getattr(getattr(event, "message", None), "edit_date", None)):
-            from handlers.command_photo_handler import install_on_event
-            from handlers.command_photo_handler import bind_overlay
-            overlay = install_on_event(bot, event, normalize_command(message_text),
-                                       skip_if_game_active=True)
-            command_photo_token = bind_overlay(overlay)
 
         if not getattr(event, "is_private", False):
             try:

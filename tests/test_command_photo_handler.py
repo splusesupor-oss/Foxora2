@@ -97,12 +97,35 @@ class PhotoTests(unittest.TestCase):
             self.assertIsNone(photos.photo_for('بازی'))
         asyncio.run(run())
 
+    def test_new_reset_command_uses_same_photo_hook(self):
+        import inspect
+        from handlers import message_handler, reset_registered_admins as reset
+        source = inspect.getsource(message_handler.handle_new_message)
+        self.assertLess(source.index('command_photo_token = bind_overlay(overlay)'),
+                        source.index('reset_registered_admins.handle('))
+
+        async def run():
+            runtime_db.kv_set(photos.NAMESPACE, 'ریست ادمین ها',
+                              {'source': {'chat_id': 'me', 'message_id': 101}})
+            self.bot.client.archive[101] = SimpleNamespace(photo=object(), media=None)
+            event = Event(-1000000000007, 7, 'ریست ادمین ها')
+            photos.install_on_event(self.bot, event, 'ریست ادمین ها')
+            with (patch.object(reset, '_allowed', return_value=True),
+                  patch.object(reset, '_eligible', return_value=[('21', '@alice')])):
+                self.assertTrue(await reset.handle(self.bot, event, event.chat_id,
+                                                   7, 'ریست ادمین ها'))
+            sent = self.bot.client.sent[-1]
+            self.assertEqual(event.replies, [])
+            self.assertIn('1_ @alice', sent[2]['caption'])
+            self.assertEqual(len(sent[2]['formatting_entities']), 4)
+        asyncio.run(run())
+
     def test_full_purge_early_route_keeps_formatted_confirmation(self):
         import inspect
         from handlers import message_handler
         from modules.full_purge import service
         source = inspect.getsource(message_handler.handle_new_message)
-        hook = source.index('install_on_event(bot, event, normalize_command(message_text),')
+        hook = source.index('command_photo_token = bind_overlay(overlay)')
         self.assertLess(hook, source.index('_full_purge.claims('))
         self.assertLess(hook, source.index('_two_factor_gate('))
 
