@@ -13,7 +13,6 @@ from modules import admin_storage
 from modules.group_id import normalize_group_id
 from modules.group_storage import get_group_owner
 from modules.owner_check import get_owner, is_global_owner
-from modules.self_admin_shield import known_bot_id
 from modules.admin_help_builder import MessageEntityBold, MessageEntityBlockquote, _u16
 
 COMMAND = "ریست ادمین ها"
@@ -49,15 +48,18 @@ def _allowed(chat_id, user_id):
     return owner is not None and str(owner) == str(user_id)
 
 
-def _protected(chat_id, bot_id):
+def _protected(chat_id):
+    # Protect the actual global and registered group owners. The bot account
+    # itself is NOT one of those roles: its stale admins.json entry can safely
+    # be removed without changing its native Soroush admin role.
     owner = get_group_owner(chat_id)
     global_owner = get_owner().get('user_id')
-    return {str(value) for value in (owner, global_owner, bot_id) if value is not None}
+    return {str(value) for value in (owner, global_owner) if value is not None}
 
 
-def _eligible(chat_id, data=None, bot_id=None):
+def _eligible(chat_id, data=None):
     data = admin_storage.load_admins() if data is None else data
-    protected = _protected(chat_id, bot_id)
+    protected = _protected(chat_id)
     rows = []
     seen = set()
     for entry in data.get(normalize_group_id(chat_id), []):
@@ -121,16 +123,16 @@ def _invalidate(chat_id, ids):
             ADMIN_PERMISSION_CACHE.pop(key, None)
 
 
-def _reset(chat_id, ids, bot_id):
+def _reset(chat_id, ids):
     """One atomic save, fresh recheck, no partial writes and no native RPC."""
     data = copy.deepcopy(admin_storage.load_admins())
     gid = normalize_group_id(chat_id)
-    eligible = dict(_eligible(chat_id, data, bot_id))
+    eligible = dict(_eligible(chat_id, data))
     chosen = set(ids) & set(eligible)
     if not chosen:
         return []
     existing = data.get(gid, [])
-    removed = [(user_id, eligible[user_id]) for user_id, _ in _eligible(chat_id, data, bot_id)
+    removed = [(user_id, eligible[user_id]) for user_id, _ in _eligible(chat_id, data)
                if user_id in chosen]
     usernames = {str(entry.get('username') or '').strip().lstrip('@').lower()
                  for entry in existing if isinstance(entry, dict)
@@ -164,11 +166,22 @@ async def handle(bot, event, chat_id, user_id, text):
             return True
         return False
     if value == COMMAND:
-        bot_id = known_bot_id(bot=bot)
-        if bot_id is None:
-            await event.reply('❌ شناسه حساب ربات مشخص نیست؛ ریست ادمین‌ها انجام نشد.')
-            return True
-        rows = _eligible(chat_id, bot_id=bot_id)
+        rows = _eligible(chat_id)
+        if rows and any(not label.startswith('@') for _uid, label in rows):
+            # Mirror «لیست ادمین»: resolve usernames only for legacy records
+            # without a stored username. Stable IDs and permissions stay put.
+            from modules.admin_display import admin_label
+            entries = {
+                str(entry.get('user_id')): entry
+                for entry in admin_storage.load_admins().get(normalize_group_id(chat_id), [])
+                if isinstance(entry, dict)
+            }
+            resolved = []
+            for uid, label in rows:
+                if not label.startswith('@'):
+                    label = await admin_label(bot, chat_id, entries.get(uid, {'user_id': uid}))
+                resolved.append((uid, label))
+            rows = resolved
         if not rows:
             _sessions.pop(key, None)
             await event.reply('ℹ️ ادمین ثبت‌شدهٔ قابل‌ریستی برای این گروه وجود ندارد.')
@@ -229,11 +242,7 @@ async def handle(bot, event, chat_id, user_id, text):
             return True
         chosen = set(state['selected'])
     try:
-        bot_id = known_bot_id(bot=bot)
-        if bot_id is None:
-            await event.reply('❌ شناسه حساب ربات مشخص نیست؛ ریست ادمین‌ها انجام نشد.')
-            return True
-        removed = _reset(chat_id, chosen, bot_id)
+        removed = _reset(chat_id, chosen)
     except Exception as error:
         bot.logger.log_error(f'RESET REGISTERED ADMINS FAILED group={chat_id} error={error!r}')
         await event.reply('❌ ذخیره‌سازی انجام نشد؛ هیچ ادمینی ریست نشد. دوباره تلاش کنید.')

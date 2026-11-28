@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from handlers import reset_registered_admins as reset
 from modules import admin_storage, group_storage
@@ -88,7 +88,7 @@ class Tests(unittest.TestCase):
                 self.assertIn('1_ @alice', panel)
                 self.assertIn('2_ @bob', panel)
                 self.assertNotIn('شناسه:', panel)
-                self.assertNotIn('70502893', panel)
+                self.assertIn('4_ @foxora', panel)
                 self.assertNotIn('legacy_only', panel)
                 self.assertNotIn('انتخاب همه |', panel)
                 self.assertNotIn('گزینه ۱ ۲ ۳', panel)
@@ -143,11 +143,12 @@ class Tests(unittest.TestCase):
             admin_storage.remove_admin(CHAT, 21)
             confirmed, ev = await self.cmd(99, 'تایید همه')
             self.assertTrue(confirmed)
-            self.assertIn('2 نفر', ev.replies[-1][0])
+            self.assertIn('3 نفر', ev.replies[-1][0])
             self.assertFalse(admin_storage.is_admin(CHAT, 22))
             self.assertFalse(admin_storage.is_admin(CHAT, 23))
             self.assertTrue(admin_storage.is_admin(CHAT, 10))
             self.assertTrue(admin_storage.is_admin(CHAT, 99))
+            self.assertFalse(admin_storage.is_admin(CHAT, 70502893))
             self.assertTrue(admin_storage.is_admin(OTHER, 21))
         asyncio.run(scenario())
 
@@ -157,7 +158,7 @@ class Tests(unittest.TestCase):
             self.assertTrue(denied)
             self.assertIn('فقط مالک', ev.replies[-1][0])
             await self.cmd(10, 'ریست ادمین ها')
-            invalid, ev = await self.cmd(10, 'گزینه ۴')
+            invalid, ev = await self.cmd(10, 'گزینه ۵')
             self.assertTrue(invalid)
             self.assertIn('شمارهٔ گزینه معتبر نیست', ev.replies[-1][0])
             self.assertTrue(admin_storage.is_admin(CHAT, 21))
@@ -178,7 +179,7 @@ class Tests(unittest.TestCase):
             self.assertEqual(save.call_count, 1)
             self.assertIn('انجام دهنده : @ioela', result.replies[-1][0])
             self.assertEqual([row['user_id'] for row in admin_storage.load_admins()['101']
-                              if isinstance(row, dict)], ['10', '99', '70502893'])
+                              if isinstance(row, dict)], ['10', '99'])
         asyncio.run(scenario())
 
     def test_failed_save_and_unauthorized_no_mutation(self):
@@ -198,11 +199,47 @@ class Tests(unittest.TestCase):
         async def scenario():
             admin_storage.save_admins({'101': [
                 {'user_id': '10'}, {'user_id': '99'},
-                {'user_id': '70502893', 'username': 'foxora'}, '@legacy_only']})
+                '@legacy_only']})
             handled, event = await self.cmd(10, 'ریست ادمین ها')
             self.assertTrue(handled)
             self.assertIn('وجود ندارد', event.replies[-1][0])
             self.assertFalse(reset.is_awaiting(CHAT, 10))
+        asyncio.run(scenario())
+
+    def test_stale_self_registration_can_be_reset_and_registered_again(self):
+        async def scenario():
+            # A leftover internal entry for the bot itself must not be hidden:
+            # it blocks a later «ثبت ادمین» with "already registered".
+            admin_storage.save_admins({'101': [
+                {'user_id': '10', 'username': 'owner'},
+                {'user_id': '99', 'username': 'global'},
+                {'user_id': '70502893', 'username': 'foxora'},
+            ]})
+            opened, ev = await self.cmd(10, 'ریست ادمین ها')
+            self.assertTrue(opened)
+            self.assertIn('1_ @foxora', ev.replies[-1][0])
+            confirmed, result = await self.cmd(10, 'تایید همه')
+            self.assertTrue(confirmed)
+            self.assertIn('1 نفر', result.replies[-1][0])
+            self.assertFalse(admin_storage.is_admin(CHAT, 70502893))
+            self.assertTrue(admin_storage.add_admin(CHAT, 70502893, username='foxora'))
+            self.assertTrue(admin_storage.is_admin(CHAT, 10))
+            self.assertTrue(admin_storage.is_admin(CHAT, 99))
+        asyncio.run(scenario())
+
+    def test_missing_stored_username_uses_same_admin_list_resolver(self):
+        async def scenario():
+            admin_storage.save_admins({'101': [
+                {'user_id': '10'}, {'user_id': '99'},
+                {'user_id': '70502893', 'name': 'Foxora.ai', 'username': None},
+            ]})
+            client = SimpleNamespace(get_entity=AsyncMock(return_value=SimpleNamespace(
+                id=70502893, username='foxora', first_name='Foxora')))
+            self.bot.client = client
+            ok, ev = await self.cmd(10, 'ریست ادمین ها')
+            self.assertTrue(ok)
+            self.assertIn('1_ @foxora', ev.replies[-1][0])
+            client.get_entity.assert_awaited_once_with(70502893)
         asyncio.run(scenario())
 
     def test_router_is_before_other_confirmation_workflows(self):
