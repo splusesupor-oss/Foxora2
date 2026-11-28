@@ -103,7 +103,7 @@ _ADMIN_EXACT = frozenset({
     # 🕹️ «اختصاصی» فقط مالک/ادمینِ ثبت‌شده ⇒ خط admin (نه صف عادی).
     "اختصاصی", "لغو اختصاصی",
     "سکوت", "رفع سکوت", "آزاد", "اخطار",
-    "ثبت ادمین", "لغو ادمین", "برکناری ادمین",
+    "ثبت ادمین", "لغو ادمین", "برکناری ادمین", "ریست ادمین ها",
     "ادمین گروه", "لغو ادمین گروه",
     "فعال", "غیر فعال", "فعال سازی",
     "ثبت گروه", "حذف گروه", "ثبت مالک", "لغو مالک", "برکناری مالک",
@@ -251,7 +251,8 @@ def classify_priority(text, event=None):
         return PRIORITY_ADMIN, LANE_ADMIN
     if _is_active_group_admin_input(event):
         return PRIORITY_ADMIN, LANE_ADMIN
-    if _is_active_background_input(event) or _is_active_command_photo_input(event):
+    if (_is_active_background_input(event) or _is_active_command_photo_input(event)
+            or _is_active_reset_admin_input(event)):
         return PRIORITY_ADMIN, LANE_ADMIN
     if raw.startswith(_COMMAND_PREFIXES):
         return PRIORITY_COMMAND, LANE_COMMAND
@@ -349,6 +350,18 @@ def _is_active_command_photo_input(event):
     try:
         from handlers import command_photo_handler
         return command_photo_handler.is_awaiting(
+            getattr(event, "chat_id", None), _event_user_id(event))
+    except Exception:
+        return False
+
+
+def _is_active_reset_admin_input(event):
+    """Keep the registered owner's text selections on the admin lane."""
+    if event is None or getattr(event, "is_private", False):
+        return False
+    try:
+        from handlers import reset_registered_admins
+        return reset_registered_admins.is_awaiting(
             getattr(event, "chat_id", None), _event_user_id(event))
     except Exception:
         return False

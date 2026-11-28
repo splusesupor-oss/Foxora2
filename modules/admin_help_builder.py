@@ -199,7 +199,6 @@ def _admin_rows():
         # 📊 نمودار رشد/ریزش — متن کامل Bold، و خودِ دستور داخل نقل‌قول.
         (READY_BLOCK, [GROWTH_HELP_TEXT, ("« نمودار »",)]),
         ("📇افزودن ادمین به ربات با دستور", ["ریپلای کنید : ثبت ادمین"]),
-        ("🗃برکناری ادمین ثبت شده ربات با دستور", ["با ریپلای : لغو ادمین | برکناری ادمین"]),
     ]
 
     for index, (title, cmds) in enumerate(blocks_before_vip):
@@ -208,6 +207,23 @@ def _admin_rows():
             continue
         # فقط بلوک عضویت اجباری (اولین بلوک) دستورهایش Bold است.
         add_item(title, cmds, bold_cmds=(index == 0))
+
+    # 🧻 هر دو عنوان Bold؛ هر دو دستور در یک نقل‌قولِ واقعی. با شریک‌کردن
+    # همین نقل‌قول، راهنما همچنان فقط دو پیام دارد (حداکثر ۳۲ نقل‌قول/پیام).
+    removal_title = "🗃برکناری ادمین ثبت شده ربات با دستور"
+    reset_title = "🧻 برای ریست کامل ادمین های ثبت شده"
+    removal_command = "با ریپلای : لغو ادمین | برکناری ادمین"
+    reset_command = "ریست ادمین ها"
+    headers = f"{removal_title}\n{reset_title}\n"
+    commands = f"{removal_command}\n{reset_command}"
+    rows.append((headers + commands, [
+        MessageEntityBold(offset=0, length=_u16(removal_title)),
+        MessageEntityBold(offset=_u16(removal_title + "\n"),
+                          length=_u16(reset_title)),
+        MessageEntityBlockquote(offset=_u16(headers), length=_u16(commands)),
+        MessageEntityBold(offset=_u16(headers + removal_command + "\n"),
+                          length=_u16(reset_command)),
+    ]))
 
     # بخش VIP
     vip_sub = [

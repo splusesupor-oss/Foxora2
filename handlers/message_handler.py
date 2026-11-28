@@ -4897,6 +4897,18 @@ async def handle_new_message(bot, event):
                     bot, event, chat_id, photo_actor, message_text):
                 return
 
+        # 🧻 Reset only bot-registered admins (never native Soroush roles).
+        # Handle owner selections before other workflows can consume «تایید».
+        if not getattr(event, "is_private", False):
+            from handlers import reset_registered_admins
+            reset_actor = (getattr(event, "sender_id", None)
+                           or getattr(getattr(event, "sender", None), "id", None))
+            if (message_text == reset_registered_admins.COMMAND
+                    or reset_registered_admins.is_awaiting(chat_id, reset_actor)):
+                if await reset_registered_admins.handle(
+                        bot, event, chat_id, reset_actor, message_text):
+                    return
+
         # ⚙️ «محدودیت دستورات»: یک نقطهٔ مرکزی، پیش از همهٔ هندلرها و
         # مسیرهای سریع. بررسیِ اول فقط چند lookup در حافظه است.
         if not getattr(event, "is_private", False) and message_text:
